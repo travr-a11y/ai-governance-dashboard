@@ -97,6 +97,9 @@
     const BILLING_STANDARD_SEATS = 8;
     const BILLING_PREMIUM_SEATS = 1;
 
+    /** Sonnet model for Module 8 optional AI narrative (Anthropic Messages API). */
+    const ANTHROPIC_REPORT_MODEL = "claude-sonnet-4-20250514";
+
     const COACHING_KEYWORDS = [
       { re: /research|due diligence|dd\b/i, label: "research & diligence" },
       { re: /draft|email|memo|letter/i, label: "drafting & comms" },
@@ -290,6 +293,20 @@
       const codeLines = parseInt(linesStr, 10) || 0;
       const email = canonicalUserEmail(userCell);
       return { row: { email, spendUsd, codeLines }, errors: [] };
+    }
+
+    /** Distinguish Anthropic admin CSV from Claude Code team CSV by header row only. */
+    function sniffCsvKind(text) {
+      const lines = text.trim().split(/\r?\n/).filter(Boolean);
+      if (lines.length < 1) return "unknown";
+      const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase().replace(/^"|"$/g, ""));
+      const anthropicRequired = ["user_email","model","product","total_requests","total_prompt_tokens","total_completion_tokens","total_net_spend_usd"];
+      if (anthropicRequired.every(r => headers.includes(r))) return "anthropic";
+      const idxUser = headers.findIndex(h => h === "user" || h.includes("email"));
+      const idxSpend = headers.findIndex(h => h.includes("spend"));
+      const idxLines = headers.findIndex(h => h.includes("line"));
+      if (idxUser >= 0 && idxSpend >= 0 && idxLines >= 0) return "code";
+      return "unknown";
     }
 
     function computeConversationSignal(conv) {
@@ -526,76 +543,110 @@
       );
     }
 
-    // Module 1
+    // Module 1 — single ingestion zone; CSV/JSON routed by headers or filename
     function Module1({
-      onData, onSettings, settings, fileName, dataInfo, onClear,
+      onData, onSettings, settings, fileName, dataInfo, onClearAll,
       onConvItems, onProjItems, onMemItems, onUsersOverlay,
       onCodeRow, convCount, projCount, memCount, codeLines, codeFileName,
-      refreshAud, audLoading, audRateUpdated, onClearExport,
+      convSourceName, projSourceName, memSourceName, usersSourceName,
+      refreshAud, audLoading, audRateUpdated,
     }) {
-      const [dragSpend, setDragSpend] = useState(false);
-      const [dragExport, setDragExport] = useState(false);
-      const [dragCode, setDragCode] = useState(false);
+      const [dragIngest, setDragIngest] = useState(false);
       const [error, setError] = useState(null);
 
-      const handleSpendFile = useCallback(file => {
-        if (!file) return;
+      const readFileText = useCallback(file => new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = e => {
-          const { data, errors } = parseCSV(e.target.result);
-          if (errors.length) { setError(errors[0]); return; }
-          setError(null);
-          const match = file.name.match(/(\d{4}-\d{2}-\d{2})[-_to]+(\d{4}-\d{2}-\d{2})/);
-          const dateRange = match ? `${match[1]} to ${match[2]}` : "Unknown period";
-          onData(data, file.name, dateRange);
-        };
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Could not read file"));
         reader.readAsText(file);
-      }, [onData]);
+      }), []);
 
-      const handleExportFile = useCallback(file => {
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = e => {
-          const text = e.target.result;
-          const nm = file.name.toLowerCase();
-          setError(null);
+      const processIngestFile = useCallback((file, text) => {
+        const nm = (file.name || "").toLowerCase();
+        const errs = [];
+        if (nm.endsWith(".json")) {
           if (nm.includes("conversation")) {
             const { items, errors } = parseConversationsFile(text);
-            if (errors.length) { setError(errors[0]); return; }
-            onConvItems(items, file.name);
+            if (errors.length) errs.push(errors[0]);
+            else onConvItems(items, file.name);
           } else if (nm.includes("project")) {
             const { items, errors } = parseProjectsFile(text);
-            if (errors.length) { setError(errors[0]); return; }
-            onProjItems(items, file.name);
+            if (errors.length) errs.push(errors[0]);
+            else onProjItems(items, file.name);
           } else if (nm.includes("memor")) {
             const { items, errors } = parseMemoriesFile(text);
-            if (errors.length) { setError(errors[0]); return; }
-            onMemItems(items, file.name);
+            if (errors.length) errs.push(errors[0]);
+            else onMemItems(items, file.name);
           } else if (nm.includes("user")) {
             const { map, metaByEmail, errors } = parseUsersFile(text);
-            if (errors.length) { setError(errors[0]); return; }
-            onUsersOverlay(map, metaByEmail, file.name);
+            if (errors.length) errs.push(errors[0]);
+            else onUsersOverlay(map, metaByEmail, file.name);
           } else {
-            setError("Name file conversations.json, projects.json, memories.json, or users.json");
+            errs.push(`${file.name}: name must include conversation, project, memor, or user (e.g. conversations.json)`);
           }
-        };
-        reader.readAsText(file);
-      }, [onConvItems, onProjItems, onMemItems, onUsersOverlay]);
+          return errs;
+        }
+        if (nm.endsWith(".csv")) {
+          const kind = sniffCsvKind(text);
+          if (kind === "anthropic") {
+            const { data, errors } = parseCSV(text);
+            if (errors.length) errs.push(errors[0]);
+            else {
+              const match = file.name.match(/(\d{4}-\d{2}-\d{2})[-_to]+(\d{4}-\d{2}-\d{2})/);
+              const dateRange = match ? `${match[1]} to ${match[2]}` : "Unknown period";
+              onData(data, file.name, dateRange);
+            }
+          } else if (kind === "code") {
+            const { row, errors } = parseCodeCSV(text);
+            if (errors.length) errs.push(errors[0]);
+            else if (!row || !row.email) errs.push(`${file.name}: could not parse Claude Code CSV row`);
+            else onCodeRow(row, file.name);
+          } else {
+            errs.push(`${file.name}: not Anthropic team CSV (needs user_email, model, product, …) nor Claude Code CSV (User, Spend, Lines)`);
+          }
+          return errs;
+        }
+        errs.push(`${file.name}: use .csv or .json`);
+        return errs;
+      }, [onData, onConvItems, onProjItems, onMemItems, onUsersOverlay, onCodeRow]);
 
-      const handleCodeFile = useCallback(file => {
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = e => {
-          const { row, errors } = parseCodeCSV(e.target.result);
-          if (errors.length) { setError(errors[0]); return; }
-          if (!row || !row.email) { setError("Could not parse Claude Code CSV row"); return; }
-          setError(null);
-          onCodeRow(row, file.name);
-        };
-        reader.readAsText(file);
-      }, [onCodeRow]);
+      const runIngestBatch = useCallback(async fileList => {
+        const files = [...fileList].filter(Boolean);
+        if (!files.length) return;
+        const allErrs = [];
+        for (const file of files) {
+          try {
+            const text = await readFileText(file);
+            const part = processIngestFile(file, text);
+            allErrs.push(...part);
+          } catch (e) {
+            allErrs.push(`${file.name}: ${e.message || e}`);
+          }
+        }
+        setError(allErrs.length ? allErrs.join(" · ") : null);
+      }, [readFileText, processIngestFile]);
+
+      const onDropIngest = useCallback(e => {
+        e.preventDefault();
+        setDragIngest(false);
+        runIngestBatch(e.dataTransfer.files);
+      }, [runIngestBatch]);
+
+      const onInputChange = useCallback(e => {
+        const { files } = e.target;
+        if (files && files.length) runIngestBatch(files);
+        e.target.value = "";
+      }, [runIngestBatch]);
 
       const seatMonthly = monthlySeatCostAud();
+
+      const manifestRow = (label, ok, detail) => React.createElement("div", {
+        key: label,
+        style:{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:12, padding:"6px 0", borderBottom:"1px solid #eef2f7", fontSize:12 }
+      },
+        React.createElement("span", { style:{ fontWeight:600, color:COLOURS.bodyText } }, label),
+        React.createElement("span", { style:{ color: ok ? COLOURS.advisory : "#9ca3af", textAlign:"right", wordBreak:"break-all" } }, detail)
+      );
 
       return React.createElement(Card, null,
         React.createElement(SectionHeader, { title:"Module 1 — Data Ingestion" }),
@@ -603,49 +654,53 @@
           React.createElement("strong", { style:{ color:COLOURS.advisory } }, "Seat billing (plan): "),
           `A$${fmtDec(seatMonthly,0)}/mo — ${BILLING_STANDARD_SEATS}× Standard (A$${SEAT_COSTS_AUD.Standard}) + ${BILLING_PREMIUM_SEATS}× Premium (A$${SEAT_COSTS_AUD.Premium}). Claude Code is separate billing.`
         ),
-        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:16, marginBottom:16 } },
-          React.createElement("div", null,
-            React.createElement("div", { style:{ fontSize:13, fontWeight:600, marginBottom:6, color:COLOURS.bodyText } }, "Anthropic Team usage CSV"),
-            React.createElement("div", {
-              onDragOver: e => { e.preventDefault(); setDragSpend(true); },
-              onDragLeave: () => setDragSpend(false),
-              onDrop: e => { e.preventDefault(); setDragSpend(false); handleSpendFile(e.dataTransfer.files[0]); },
-              onClick: () => document.getElementById("csvInput").click(),
-              style:{ border:`2px dashed ${dragSpend?COLOURS.advisory:"#d1d5db"}`, borderRadius:8, padding:"20px 12px", textAlign:"center", cursor:"pointer", background:dragSpend?"#f5f3ff":"#f9fafb" }
-            },
-              React.createElement("div", { style:{ fontSize:13, color:COLOURS.captionText } }, fileName ? `✓ ${fileName}` : "Drop or click — spend CSV"),
-              React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:4 } }, "Required columns from Anthropic admin export")
-            ),
-            React.createElement("input", { id:"csvInput", type:"file", accept:".csv", style:{ display:"none" }, onChange: e => handleSpendFile(e.target.files[0]) })
+        React.createElement("div", {
+          onDragOver: e => { e.preventDefault(); setDragIngest(true); },
+          onDragLeave: () => setDragIngest(false),
+          onDrop: onDropIngest,
+          onClick: () => document.getElementById("ingestInput").click(),
+          style:{
+            border:`2px dashed ${dragIngest ? COLOURS.accent : "#d1d5db"}`,
+            borderRadius:8, padding:"22px 16px", textAlign:"center", cursor:"pointer",
+            background: dragIngest ? "#f7fce8" : "#f9fafb", marginBottom:14
+          }
+        },
+          React.createElement("div", { style:{ fontSize:14, fontWeight:700, color:COLOURS.advisory, marginBottom:6 } }, "Upload data"),
+          React.createElement("div", { style:{ fontSize:13, color:COLOURS.captionText, lineHeight:1.5 } },
+            "Drop files here or click — ",
+            React.createElement("strong", null, "one zone"),
+            " for Anthropic CSV, Claude Code CSV, and Claude.ai JSON exports."
           ),
-          React.createElement("div", null,
-            React.createElement("div", { style:{ fontSize:13, fontWeight:600, marginBottom:6, color:COLOURS.bodyText } }, "Claude.ai export (optional)"),
-            React.createElement("div", {
-              onDragOver: e => { e.preventDefault(); setDragExport(true); },
-              onDragLeave: () => setDragExport(false),
-              onDrop: e => { e.preventDefault(); setDragExport(false); handleExportFile(e.dataTransfer.files[0]); },
-              onClick: () => document.getElementById("jsonInput").click(),
-              style:{ border:`2px dashed ${dragExport?COLOURS.accent:"#d1d5db"}`, borderRadius:8, padding:"20px 12px", textAlign:"center", cursor:"pointer", background:dragExport?"#f7fce8":"#f9fafb" }
-            },
-              React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText } }, "conversations / projects / memories / users.json"),
-              React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:4 } }, `Loaded: ${convCount} convos · ${projCount} projects · ${memCount} memories`)
-            ),
-            React.createElement("input", { id:"jsonInput", type:"file", accept:".json,application/json", style:{ display:"none" }, onChange: e => handleExportFile(e.target.files[0]) })
-          ),
-          React.createElement("div", null,
-            React.createElement("div", { style:{ fontSize:13, fontWeight:600, marginBottom:6, color:COLOURS.bodyText } }, "Claude Code team CSV (optional)"),
-            React.createElement("div", {
-              onDragOver: e => { e.preventDefault(); setDragCode(true); },
-              onDragLeave: () => setDragCode(false),
-              onDrop: e => { e.preventDefault(); setDragCode(false); handleCodeFile(e.dataTransfer.files[0]); },
-              onClick: () => document.getElementById("codeCsvInput").click(),
-              style:{ border:`2px dashed ${dragCode?COLOURS.advisory:"#d1d5db"}`, borderRadius:8, padding:"20px 12px", textAlign:"center", cursor:"pointer", background:dragCode?"#f5f3ff":"#f9fafb" }
-            },
-              React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText } }, codeFileName ? `✓ ${codeFileName}` : "User, Spend (USD), Lines"),
-              React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:4 } }, codeLines ? `${fmt(codeLines)} lines (Trav)` : "Does not affect fluency averages")
-            ),
-            React.createElement("input", { id:"codeCsvInput", type:"file", accept:".csv", style:{ display:"none" }, onChange: e => handleCodeFile(e.target.files[0]) })
+          React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:8 } },
+            "CSV is detected from column headers. JSON files must be named like ",
+            React.createElement("code", null, "conversations.json"),
+            ", ",
+            React.createElement("code", null, "projects.json"),
+            ", ",
+            React.createElement("code", null, "memories.json"),
+            ", ",
+            React.createElement("code", null, "users.json"),
+            ". You can select or drop multiple files at once."
           )
+        ),
+        React.createElement("input", {
+          id:"ingestInput", type:"file", multiple:true, accept:".csv,.json,application/json",
+          style:{ display:"none" }, onChange: onInputChange
+        }),
+        React.createElement("div", { style:{ background:"#fff", border:"1px solid #e5e7eb", borderRadius:8, padding:"10px 14px", marginBottom:14 } },
+          React.createElement("div", { style:{ fontSize:12, fontWeight:700, color:COLOURS.bodyText, marginBottom:4 } }, "Loaded sources"),
+          manifestRow("Anthropic team CSV", !!fileName, fileName || "— Not loaded"),
+          manifestRow("Conversations", convCount > 0, convCount > 0 ? `${fmt(convCount)} convos${convSourceName ? ` · ${convSourceName}` : ""}` : "— Not loaded"),
+          manifestRow("Projects", projCount > 0, projCount > 0 ? `${fmt(projCount)} projects${projSourceName ? ` · ${projSourceName}` : ""}` : "— Not loaded"),
+          manifestRow("Memories", memCount > 0, memCount > 0 ? `${fmt(memCount)} memories${memSourceName ? ` · ${memSourceName}` : ""}` : "— Not loaded"),
+          manifestRow("Users (UUID map)", !!usersSourceName, usersSourceName ? `✓ ${usersSourceName}` : "— Not loaded"),
+          manifestRow("Claude Code CSV", !!codeFileName, codeFileName ? `${codeFileName}${codeLines ? ` · ${fmt(codeLines)} lines (first row)` : ""}` : "— Not loaded · does not affect fluency")
+        ),
+        React.createElement("div", { style:{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 } },
+          React.createElement("button", {
+            type:"button", onClick: onClearAll,
+            style:{ fontSize:12, padding:"6px 12px", borderRadius:6, border:`1px solid ${COLOURS.advisory}`, background:"#fff", color:COLOURS.advisory, cursor:"pointer", fontWeight:600 }
+          }, "Clear all uploads")
         ),
         React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:12, marginBottom:14 } },
           React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:6 } },
@@ -675,15 +730,11 @@
             );
           })
         ),
-        React.createElement("div", { style:{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:10 } },
-          React.createElement("button", { type:"button", onClick:onClearExport, style:{ fontSize:12, padding:"6px 12px", borderRadius:6, border:"1px solid #d1d5db", background:"#fff", cursor:"pointer" } }, "Clear Claude.ai + Code uploads")
-        ),
         error && React.createElement("div", { style:{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6, padding:"10px 14px", fontSize:13, color:"#dc2626", marginBottom:12 } },
           React.createElement("strong", null, "Error: "), error
         ),
-        dataInfo && React.createElement("div", { style:{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:6, padding:"8px 14px", fontSize:13, color:"#166534", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 } },
-          React.createElement("span", null, "✓ ", dataInfo),
-          React.createElement("button", { onClick:onClear, style:{ background:"none", border:"1px solid #166534", color:"#166534", borderRadius:4, padding:"2px 10px", fontSize:12, cursor:"pointer" } }, "Clear spend CSV")
+        dataInfo && React.createElement("div", { style:{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:6, padding:"8px 14px", fontSize:13, color:"#166534" } },
+          React.createElement("span", null, "✓ ", dataInfo)
         )
       );
     }
@@ -1073,6 +1124,52 @@
       return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
 
+    function formatReportingPeriod(rawRows, dateRange) {
+      if (!rawRows) {
+        return { tone: "demo", line: "Demo / sample data — not tied to a live Anthropic export period." };
+      }
+      const parts = dateRange && dateRange !== "Unknown period" ? String(dateRange).match(/(\d{4}-\d{2}-\d{2})/g) : null;
+      if (parts && parts.length === 2) {
+        const dA = new Date(parts[0] + "T12:00:00Z");
+        const dB = new Date(parts[1] + "T12:00:00Z");
+        const start = dA <= dB ? dA : dB;
+        const end = dA <= dB ? dB : dA;
+        const inclusiveDays = Math.max(1, Math.floor((end.getTime() - start.getTime()) / 86400000) + 1);
+        const opts = { day: "numeric", month: "short", year: "numeric" };
+        return {
+          tone: "live",
+          line: `${start.toLocaleDateString("en-AU", opts)} — ${end.toLocaleDateString("en-AU", opts)} · ${inclusiveDays} days (inclusive)`,
+        };
+      }
+      return { tone: "unknown", line: "Unknown — CSV filename did not include start and end dates (YYYY-MM-DD)." };
+    }
+
+    function buildReportMetricsPayload(users, metrics, initiatives, settings, dateRange) {
+      return JSON.stringify({
+        period: dateRange || null,
+        audRate: settings.audRate,
+        totalSeats: settings.totalSeats,
+        orgMetrics: metrics,
+        initiatives: initiatives.map(i => ({
+          name: i.name, owner: i.owner, targetMetric: i.targetMetric, targetValue: i.targetValue, lowerIsBetter: !!i.lowerIsBetter,
+        })),
+        users: users.map(u => ({
+          name: u.name, email: u.email, entity: u.entity, seatTier: u.seatTier || "Standard",
+          totalSpendUSD: u.totalSpendUSD, totalSpendAUD: u.totalSpendAUD, totalTokens: u.totalTokens, totalRequests: u.totalRequests,
+          opusPct: u.opusPct, fluencyScore: u.fluencyScore, fluencyTier: u.fluencyTier,
+          surfaces: Object.keys(u.productBreakdown || {}),
+          active: u.totalRequests > 0,
+        })),
+      });
+    }
+
+    const REPORT_CLAUDE_SYSTEM = [
+      "You are an AI governance analyst for Frank Group (Frank Advisory and Frank Law), Australia.",
+      "Write a plain-text executive report for James Frank and the AI Committee using ONLY the JSON metrics provided — do not invent numbers or users.",
+      "Australian English. Sections: Executive summary; Adoption and digital fluency; Model mix and cost discipline; AI Committee initiatives (reference targets); User highlights (call out inactive seats); Risks and recommendations; Next steps.",
+      "Tone: professional, concise, board-ready. No markdown code fences. Do not include conversation message content (none was supplied).",
+    ].join(" ");
+
     function buildGovernanceReportHtml(reportPlain, dateRange) {
       const today = new Date().toLocaleDateString(undefined, { dateStyle: "long" });
       const body = escapeHtml(reportPlain || "").replace(/\n/g, "<br/>");
@@ -1167,6 +1264,9 @@ body{font-family:'Segoe UI',Arial,sans-serif;color:#1a1a1a;margin:0;padding:24px
     function Module8ReportGenerator({ users, metrics, initiatives, settings, dateRange }) {
       const [report, setReport] = useState("");
       const [copied, setCopied] = useState(false);
+      const [anthropicKey, setAnthropicKey] = useState("");
+      const [aiLoading, setAiLoading] = useState(false);
+      const [aiError, setAiError] = useState(null);
 
       const generate = () => {
         const today = new Date().toISOString().split("T")[0];
@@ -1291,11 +1391,71 @@ Generated by Frank Group AI Governance Dashboard`);
         setTimeout(() => { try { w.print(); } catch (e) {} }, 300);
       };
 
+      const generateWithClaude = async () => {
+        const key = anthropicKey.trim();
+        if (!key) { setAiError("Paste your Anthropic API key below (session only — not saved)."); return; }
+        setAiLoading(true);
+        setAiError(null);
+        try {
+          const payload = buildReportMetricsPayload(users, metrics, initiatives, settings, dateRange);
+          const res = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": key,
+              "anthropic-version": "2023-06-01",
+              "anthropic-dangerous-direct-browser-access": "true",
+            },
+            body: JSON.stringify({
+              model: ANTHROPIC_REPORT_MODEL,
+              max_tokens: 8192,
+              system: REPORT_CLAUDE_SYSTEM,
+              messages: [{ role: "user", content: "Use this JSON as the sole source of quantitative facts:\n\n" + payload }],
+            }),
+          });
+          const raw = await res.text();
+          let data;
+          try { data = JSON.parse(raw); } catch (_) { data = null; }
+          if (!res.ok) {
+            setAiError((data && data.error && data.error.message) ? data.error.message : (raw.slice(0, 400) || `HTTP ${res.status}`));
+            return;
+          }
+          const blocks = Array.isArray(data.content) ? data.content : [];
+          const text = blocks.filter(c => c.type === "text").map(c => c.text).join("\n").trim();
+          if (!text) setAiError("Empty response from Claude.");
+          else setReport(text);
+        } catch (e) {
+          setAiError(String(e.message || e) + " If the browser blocked the request, use Generate report (template) or a server-side proxy.");
+        } finally {
+          setAiLoading(false);
+        }
+      };
+
       return React.createElement(Card, null,
         React.createElement(SectionHeader, { title:"Module 8 — Report Generator" }),
-        React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:12 } }, "Generate first, then copy, download Word-compatible .doc, plain .txt, or use Print / Save as PDF (browser print dialog)."),
+        React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:12, lineHeight:1.5 } },
+          "Generate a report first (template below, or Claude using your API key), then copy, download Word-compatible .doc, plain .txt, or Print / Save as PDF. ",
+          React.createElement("strong", null, "Claude option"),
+          " sends aggregated metrics to Anthropic — key stays in this tab only; nothing is stored by the dashboard."
+        ),
+        React.createElement("div", { style:{ background:"#f8fafc", border:"1px solid #e5e7eb", borderRadius:8, padding:"12px 14px", marginBottom:14 } },
+          React.createElement("div", { style:{ fontSize:12, fontWeight:600, color:COLOURS.bodyText, marginBottom:8 } }, "Claude narrative (optional)"),
+          React.createElement("input", {
+            type:"password", autoComplete:"off", placeholder:"Anthropic API key — session only",
+            value: anthropicKey, onChange: e => setAnthropicKey(e.target.value),
+            style:{ width:"100%", maxWidth:420, border:"1px solid #d1d5db", borderRadius:6, padding:"8px 10px", fontSize:13, marginBottom:8, boxSizing:"border-box" }
+          }),
+          React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:8, alignItems:"center" } },
+            React.createElement("button", {
+              type:"button", onClick: generateWithClaude, disabled: aiLoading,
+              style:{ background:COLOURS.accent, color:"#1a1a1a", border:"none", borderRadius:6, padding:"8px 16px", fontSize:13, fontWeight:700, cursor: aiLoading ? "wait" : "pointer", opacity: aiLoading ? 0.7 : 1 }
+            }, aiLoading ? "Calling Claude…" : `Generate with Claude (${ANTHROPIC_REPORT_MODEL})`)
+          ),
+          React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:8 } }, "Requires Anthropic browser access header; if blocked, use template or a Railway proxy with the key server-side.")
+        ),
+        aiError && React.createElement("div", { style:{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6, padding:"10px 14px", fontSize:12, color:"#b91c1c", marginBottom:12, whiteSpace:"pre-wrap" } }, aiError),
         React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:10, marginBottom:16 } },
-          React.createElement("button", { onClick:generate, style:{ background:COLOURS.advisory, color:"#fff", border:"none", borderRadius:6, padding:"10px 20px", fontSize:13, fontWeight:600, cursor:"pointer" } }, "Generate Report"),
+          React.createElement("button", { onClick:generate, style:{ background:COLOURS.advisory, color:"#fff", border:"none", borderRadius:6, padding:"10px 20px", fontSize:13, fontWeight:600, cursor:"pointer" } }, "Generate report (template)"),
           report && React.createElement("button", { onClick:copy, style:{ background:copied?"#166534":"#fff", color:copied?"#fff":"#374151", border:"1px solid #d1d5db", borderRadius:6, padding:"10px 16px", fontSize:13, cursor:"pointer" } }, copied?"✓ Copied!":"Copy to Clipboard"),
           report && React.createElement("button", { onClick:downloadWord, style:{ background:COLOURS.accent, color:"#1a1a1a", border:"none", borderRadius:6, padding:"10px 16px", fontSize:13, fontWeight:700, cursor:"pointer" } }, "Download .doc (Word)"),
           report && React.createElement("button", { onClick:printPdf, style:{ background:"#fff", color:COLOURS.advisory, border:`1px solid ${COLOURS.advisory}`, borderRadius:6, padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer" } }, "Print / PDF"),
@@ -1438,6 +1598,10 @@ Generated by Frank Group AI Governance Dashboard`);
       const [userMetaByEmail, setUserMetaByEmail] = useState({});
       const [codeData, setCodeData]     = useState(null);
       const [codeFileName, setCodeFileName] = useState(null);
+      const [convSourceName, setConvSourceName] = useState(null);
+      const [projSourceName, setProjSourceName] = useState(null);
+      const [memSourceName, setMemSourceName] = useState(null);
+      const [usersSourceName, setUsersSourceName] = useState(null);
       const [audLoading, setAudLoading] = useState(false);
       const [audRateUpdated, setAudRateUpdated] = useState(null);
 
@@ -1490,8 +1654,11 @@ Generated by Frank Group AI Governance Dashboard`);
 
       const handleClear = () => { setRawRows(null); setFileName(null); setDateRange(null); setDataInfo(null); };
       const handleClearExport = () => {
-        setConvItems([]); setProjItems([]); setMemItems([]); setUuidOverlay({}); setUserMetaByEmail({}); setCodeData(null); setCodeFileName(null);
+        setConvItems([]); setProjItems([]); setMemItems([]); setUuidOverlay({}); setUserMetaByEmail({});
+        setCodeData(null); setCodeFileName(null);
+        setConvSourceName(null); setProjSourceName(null); setMemSourceName(null); setUsersSourceName(null);
       };
+      const handleClearAll = () => { handleClear(); handleClearExport(); };
 
       const refreshAud = useCallback(async () => {
         setAudLoading(true);
@@ -1510,8 +1677,11 @@ Generated by Frank Group AI Governance Dashboard`);
       const updateSettings = patch => setSettings(s=>({...s,...patch}));
       const updateLimit = (email,val) => setSpendOverrides(p=>({...p,[email]:val}));
 
+      const reportingPeriod = useMemo(() => formatReportingPeriod(rawRows, dateRange), [rawRows, dateRange]);
+      const periodAccent = reportingPeriod.tone === "live" ? COLOURS.accent : reportingPeriod.tone === "demo" ? "#3a4a7c" : "#94a3b8";
+
       return React.createElement("div", { style:{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", background:"#f1f5f9", minHeight:"100vh", padding:24, color:COLOURS.bodyText } },
-        React.createElement("div", { style:{ background:COLOURS.advisory, color:"#fff", borderRadius:10, padding:"20px 28px", marginBottom:24, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12, borderLeft:`6px solid ${COLOURS.accent}` } },
+        React.createElement("div", { style:{ background:COLOURS.advisory, color:"#fff", borderRadius:10, padding:"20px 28px", marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12, borderLeft:`6px solid ${COLOURS.accent}` } },
           React.createElement("div", null,
             React.createElement("div", { style:{ fontSize:12, fontWeight:700, color:COLOURS.accent, letterSpacing:2, textTransform:"uppercase" } }, "The Frank Group"),
             React.createElement("div", { style:{ fontSize:22, fontWeight:800, letterSpacing:0.3 } }, "AI Governance Dashboard"),
@@ -1522,28 +1692,42 @@ Generated by Frank Group AI Governance Dashboard`);
             rawRows  && React.createElement("div", { style:{ fontSize:11, background:COLOURS.accent, color:"#1a1a1a", padding:"4px 12px", borderRadius:9999, fontWeight:700 } }, `Live: ${dateRange}`)
           )
         ),
+        React.createElement("div", {
+          style:{
+            background:"#fff", border:"1px solid #e2e8f0", borderRadius:8, padding:"14px 20px", marginBottom:24,
+            borderLeft:`4px solid ${periodAccent}`, boxShadow:"0 1px 2px rgba(15,23,42,0.06)",
+          }
+        },
+          React.createElement("div", { style:{ fontSize:11, fontWeight:700, color:COLOURS.advisory, textTransform:"uppercase", letterSpacing:1.2, marginBottom:6 } }, "Reporting period"),
+          React.createElement("div", { style:{ fontSize:16, fontWeight:700, color:COLOURS.bodyText, lineHeight:1.4 } }, reportingPeriod.line)
+        ),
         React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:20 } },
           React.createElement(Module1, {
-            onData:handleData, onSettings:updateSettings, settings, fileName, dataInfo, onClear:handleClear,
-            onConvItems: (items) => setConvItems(items),
-            onProjItems: (items) => setProjItems(items),
-            onMemItems: (items) => setMemItems(items),
-            onUsersOverlay: (map, meta) => { setUuidOverlay(prev => ({ ...prev, ...map })); setUserMetaByEmail(prev => ({ ...prev, ...meta })); },
+            onData:handleData, onSettings:updateSettings, settings, fileName, dataInfo, onClearAll:handleClearAll,
+            onConvItems: (items, name) => { setConvItems(items); setConvSourceName(name || null); },
+            onProjItems: (items, name) => { setProjItems(items); setProjSourceName(name || null); },
+            onMemItems: (items, name) => { setMemItems(items); setMemSourceName(name || null); },
+            onUsersOverlay: (map, meta, name) => {
+              setUuidOverlay(prev => ({ ...prev, ...map }));
+              setUserMetaByEmail(prev => ({ ...prev, ...meta }));
+              setUsersSourceName(name || null);
+            },
             onCodeRow: (row, name) => { setCodeData(row); setCodeFileName(name); },
             convCount: convItems.length, projCount: projItems.length, memCount: memItems.length,
             codeLines: codeData ? codeData.codeLines : 0, codeFileName,
-            refreshAud, audLoading, audRateUpdated, onClearExport: handleClearExport,
+            convSourceName, projSourceName, memSourceName, usersSourceName,
+            refreshAud, audLoading, audRateUpdated,
           }),
           React.createElement(Module2, { users, settings, metrics, hasBehaviorData: behavior.hasBehaviorData }),
           React.createElement(Module3, { users, metrics }),
           React.createElement(Module4, { users, onUpdateLimit:updateLimit, audRate: settings.audRate, codeData }),
           React.createElement(Module5, { users }),
-          React.createElement(Module6, { users, settings, dateRange }),
           React.createElement(Module7InitiativeTracker, { initiatives, setInitiatives, metrics }),
           React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange }),
-          React.createElement(Module9Coaching, { users, metrics, hasBehaviorData: behavior.hasBehaviorData })
+          React.createElement(Module9Coaching, { users, metrics, hasBehaviorData: behavior.hasBehaviorData }),
+          React.createElement(Module6, { users, settings, dateRange })
         ),
-        React.createElement("div", { style:{ textAlign:"center", color:"#9ca3af", fontSize:11, marginTop:24, paddingBottom:12 } }, "Frank Group AI Governance Dashboard · Phase 1.5 · Client-side only · No data leaves your browser")
+        React.createElement("div", { style:{ textAlign:"center", color:"#9ca3af", fontSize:11, marginTop:24, paddingBottom:12 } }, "Frank Group AI Governance Dashboard · Phase 1.5 · Optional Claude report sends metrics to Anthropic; otherwise client-side only")
       );
     }
 

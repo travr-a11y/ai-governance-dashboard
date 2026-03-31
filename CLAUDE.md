@@ -42,6 +42,7 @@ Pure static site. Zero build step. No backend.
 - All data processing is client-side (FileReader API + inline CSV/JSON parsers)
 - No localStorage, no sessionStorage
 - **Optional:** `fetch` to `https://api.frankfurter.app/latest?from=USD&to=AUD` when the user clicks **Refresh live** on the AUD/USD rate (CORS-friendly, no API key)
+- **Optional:** Module 8 **Generate with Claude** — user-pasted Anthropic API key (session only); `fetch` to `https://api.anthropic.com/v1/messages` with `anthropic-dangerous-direct-browser-access: true` (BYOK). Template report stays fully client-side.
 
 Deploy = `git push origin main`. Railway runs `npx serve .` to serve the static files.
 
@@ -80,6 +81,9 @@ Maps raw Anthropic model IDs → Opus / Sonnet / Haiku tier.
 - Haiku: `#3a4a7c`
 - Body / captions: `#1a1a1a` / `#4a4a4a`
 
+### ANTHROPIC_REPORT_MODEL
+Sonnet model ID for Module 8 optional AI narrative (`claude-sonnet-4-20250514` in code; adjust if Anthropic deprecates the ID).
+
 ### COACHING_KEYWORDS
 Regex buckets for Module 9 cross-team spotlight from **conversation titles only** (no message body).
 
@@ -89,15 +93,17 @@ Regex buckets for Module 9 cross-team spotlight from **conversation titles only*
 
 | # | Name | Key logic |
 |---|------|-----------|
-| 1 | Data Ingestion | Anthropic team CSV; optional Claude.ai JSON (`conversations`, `projects`, `memories`, `users`); optional Claude Code team CSV (User / Spend USD / Lines). AUD/USD manual + **Refresh live** (Frankfurter). Seat cost summary. |
+| 1 | Data Ingestion | **Single upload zone** — drop or multi-select `.csv` / `.json`; CSV routed by headers (Anthropic vs Claude Code); JSON by filename (`conversations`, `projects`, `memories`, `users`). Manifest + **Clear all uploads**. AUD/USD manual + **Refresh live** (Frankfurter). Seat cost summary. |
 | 2 | AI Adoption | **Spend-only fluency** if no conversations: `token×0.5 + surface×0.3 + recency×0.2`. **Multi-signal** if `conversations.json` loaded: spend×0.25 + conversation×0.4 + project×0.2 + config×0.15. Same tier bands (70 / 40 / 10). |
 | 3 | Model Governance | Opus% per user. Flags. Recommendation library. |
 | 4 | User Spend & Tokens | Sortable table; **Seat** column (Standard/Premium); **Claude Code** sub-row when Code CSV loaded; expandable breakdown; AUD uses live `audRate`. |
 | 5 | Product Analysis | Bar chart by surface; Opus leverage callouts. |
-| 6 | Savings Calculator | Opus→Sonnet migration slider; annualised. |
+| 6 | Savings Calculator | Opus→Sonnet migration slider; annualised. **Rendered at the bottom of the page** (after Module 9). |
 | 7 | AI Committee Initiative Tracker | Editable initiatives; JSON export. *(Was numbered Module 8 in Phase 1 UI.)* |
-| 8 | Report Generator | Plain-text report + **Download .doc** (HTML Blob, MS Word–compatible) + **Print / PDF** + `.txt`. *(Was Module 7.)* |
+| 8 | Report Generator | **Generate report (template)** + optional **Generate with Claude** (BYOK, aggregated JSON metrics only) + **Download .doc** + **Print / PDF** + `.txt`. *(Was Module 7.)* |
 | 9 | Coaching & leaderboard | Ranked fluency list; rule-based cards (metadata only); category spotlight from conversation **titles**. |
+
+**Header:** **Reporting period** banner under the title (demo vs live dates from CSV filename, inclusive day count when parsed).
 
 ---
 
