@@ -36,6 +36,23 @@ import {
       "claude_haiku_4_5_20251001":  "Haiku",
     };
 
+    const CODE_MODEL_PRICING = {
+      "claude-opus-4":    { in: 15.00, out: 75.00, cw: 18.75, cr: 1.50 },
+      "claude-sonnet-4":  { in:  3.00, out: 15.00, cw:  3.75, cr: 0.30 },
+      "claude-haiku-4":   { in:  0.80, out:  4.00, cw:  1.00, cr: 0.08 },
+      "claude-opus-3":    { in: 15.00, out: 75.00, cw: 18.75, cr: 1.50 },
+      "claude-sonnet-3":  { in:  3.00, out: 15.00, cw:  3.75, cr: 0.30 },
+      "claude-haiku-3":   { in:  0.25, out:  1.25, cw:  0.30, cr: 0.03 },
+    };
+
+    function codeModelPrice(modelVersion) {
+      const mv = (modelVersion || "").toLowerCase();
+      for (const prefix of Object.keys(CODE_MODEL_PRICING)) {
+        if (mv.startsWith(prefix)) return CODE_MODEL_PRICING[prefix];
+      }
+      return CODE_MODEL_PRICING["claude-sonnet-4"];
+    }
+
     const COLOURS = {
       opus:           "#e74c3c",
       sonnet:         "#88aa00",
@@ -81,6 +98,8 @@ import {
       { re: /contract|legal|clause/i, label: "legal & contracts" },
       { re: /model|excel|sheet|data/i, label: "data & sheets" },
     ];
+
+    const ADMIN_PIN = "frank2026";
 
     const MODEL_RECOMMENDATIONS = [
       { task: "Daily Cowork sessions, drafting, emails", model: "Sonnet", reason: "Fast, sufficient quality, 1/5 Opus cost" },
@@ -268,13 +287,96 @@ import {
       return { row: { email, spendUsd, codeLines }, errors: [] };
     }
 
+    /**
+     * Parse the new Claude API token export CSV.
+     * Filters to rows where workspace === "Claude Code".
+     */
+    function parseCodeApiCSV(text) {
+      const lines = text.trim().split(/\r?\n/).filter(Boolean);
+      if (lines.length < 2) return { row: null, errors: ["File appears empty"] };
+
+      const headers = parseCSVLine(lines[0].replace(/^\uFEFF/, "")).map(h => h.toLowerCase().trim());
+      const col = name => headers.indexOf(name);
+
+      const iModel     = col("model_version");
+      const iWorkspace = col("workspace");
+      const iInNoCache = col("usage_input_tokens_no_cache");
+      const iInCW5     = col("usage_input_tokens_cache_write_5m");
+      const iInCW1h    = col("usage_input_tokens_cache_write_1h");
+      const iInCR      = col("usage_input_tokens_cache_read");
+      const iOut       = col("usage_output_tokens");
+
+      if ([iModel, iWorkspace, iOut].some(i => i < 0)) {
+        return { row: null, errors: ["Missing required columns: model_version, workspace, usage_output_tokens"] };
+      }
+
+      let totalSpendUsd = 0;
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      const modelBreakdown = {};
+      let usageRowCount = 0;
+
+      const cellInt = (vals, idx) => {
+        if (idx < 0) return 0;
+        return parseInt(vals[idx] || "0", 10) || 0;
+      };
+
+      for (let i = 1; i < lines.length; i++) {
+        const vals = parseCSVLine(lines[i]);
+        const workspace = (vals[iWorkspace] || "").trim();
+        if (workspace !== "Claude Code") continue;
+
+        usageRowCount++;
+        const model        = (vals[iModel] || "").trim();
+        const inNoCache    = cellInt(vals, iInNoCache);
+        const inCW5        = cellInt(vals, iInCW5);
+        const inCW1h       = cellInt(vals, iInCW1h);
+        const inCR         = cellInt(vals, iInCR);
+        const outTokens    = cellInt(vals, iOut);
+
+        const p = codeModelPrice(model);
+        const rowSpend = (
+          (inNoCache / 1e6) * p.in  +
+          (inCW5     / 1e6) * p.cw  +
+          (inCW1h    / 1e6) * p.cw  +
+          (inCR      / 1e6) * p.cr  +
+          (outTokens / 1e6) * p.out
+        );
+
+        totalSpendUsd     += rowSpend;
+        totalInputTokens  += inNoCache + inCW5 + inCW1h + inCR;
+        totalOutputTokens += outTokens;
+
+        const tier = MODEL_CLASS[model] || (model.toLowerCase().includes("opus") ? "Opus"
+                                     : model.toLowerCase().includes("haiku") ? "Haiku" : "Sonnet");
+        if (!modelBreakdown[tier]) modelBreakdown[tier] = { tokens: 0, spend: 0 };
+        modelBreakdown[tier].tokens += inNoCache + inCW5 + inCW1h + inCR + outTokens;
+        modelBreakdown[tier].spend  += rowSpend;
+      }
+
+      return {
+        row: {
+          email: "trowley@frankadvisory.com.au",
+          spendUsd: totalSpendUsd,
+          totalTokens: totalInputTokens + totalOutputTokens,
+          totalInputTokens,
+          totalOutputTokens,
+          modelBreakdown,
+          usageRowCount,
+        },
+        errors: [],
+      };
+    }
+
     /** Distinguish Anthropic admin CSV from Claude Code team CSV by header row only. */
     function sniffCsvKind(text) {
       const lines = text.trim().split(/\r?\n/).filter(Boolean);
       if (lines.length < 1) return "unknown";
-      const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase().replace(/^"|"$/g, ""));
+      const headers = parseCSVLine(lines[0].replace(/^\uFEFF/, "")).map(h => h.trim().toLowerCase().replace(/^"|"$/g, ""));
       const anthropicRequired = ["user_email","model","product","total_requests","total_prompt_tokens","total_completion_tokens","total_net_spend_usd"];
       if (anthropicRequired.every(r => headers.includes(r))) return "anthropic";
+      const newCodeRequired = ["usage_date_utc", "model_version", "workspace", "usage_output_tokens"];
+      if (newCodeRequired.every(r => headers.includes(r))) return "code-api";
       const idxUser = headers.findIndex(h => h === "user" || h.includes("email"));
       const idxSpend = headers.findIndex(h => h.includes("spend"));
       const idxLines = headers.findIndex(h => h.includes("line"));
@@ -375,7 +477,7 @@ import {
 
     // ─── Aggregation ──────────────────────────────────────────────────────────────
 
-    function aggregateData(rows, audRate, behavior) {
+    function aggregateData(rows, audRate, behavior, codeRow) {
       const b = behavior || { hasBehaviorData: false, convByEmail: {}, projByEmail: {}, memByEmail: {}, userMetaByEmail: {} };
       const byUser = {};
       rows.forEach(row => {
@@ -408,6 +510,29 @@ import {
       });
 
       const allUsers = Object.values(byUser);
+      if (codeRow && codeRow.email) {
+        const travisKey = Object.keys(USERS_MAP).find(
+          k => k.toLowerCase() === codeRow.email.toLowerCase()
+        );
+        const travisUser = allUsers.find(u => u.email?.toLowerCase() === travisKey?.toLowerCase());
+        if (travisUser) {
+          travisUser.totalSpendUSD += codeRow.spendUsd || 0;
+          if (codeRow.totalInputTokens != null && codeRow.totalOutputTokens != null) {
+            travisUser.totalPromptTokens += codeRow.totalInputTokens;
+            travisUser.totalCompletionTokens += codeRow.totalOutputTokens;
+          } else if (codeRow.totalTokens) {
+            travisUser.totalPromptTokens += codeRow.totalTokens;
+          }
+          travisUser.codeSpendUSD = codeRow.spendUsd || 0;
+          travisUser.codeTokens = codeRow.totalTokens || 0;
+          travisUser.codeCsvLines = codeRow.codeLines || 0;
+          Object.entries(codeRow.modelBreakdown || {}).forEach(([tier, v]) => {
+            if (!travisUser.modelBreakdown[tier]) travisUser.modelBreakdown[tier] = { spend:0, tokens:0, requests:0 };
+            travisUser.modelBreakdown[tier].tokens += v.tokens || 0;
+            travisUser.modelBreakdown[tier].spend  += v.spend || 0;
+          });
+        }
+      }
       const activeUsers = allUsers.filter(u => u.totalRequests > 0);
       const orgAvgTokens = activeUsers.length > 0
         ? activeUsers.reduce((s,u) => s + u.totalPromptTokens + u.totalCompletionTokens, 0) / activeUsers.length
@@ -465,6 +590,9 @@ import {
           spendLimit: spendLimit ?? null, spendUtilisation,
           seatTier,
           behavior: { conv, proj, mem },
+          codeSpendUSD: u.codeSpendUSD || 0,
+          codeTokens: u.codeTokens || 0,
+          codeCsvLines: u.codeCsvLines || 0,
         };
       }).sort((a,b) => b.totalTokens - a.totalTokens);
     }
@@ -516,11 +644,93 @@ import {
       );
     }
 
+    function TabBar({ activeTab, onSelect }) {
+      const tabs = [
+        { id: "dashboard", label: "Dashboard" },
+        { id: "admin", label: "Admin" },
+      ];
+      return React.createElement("div", {
+        style: {
+          display: "flex", gap: 0, borderBottom: `2px solid ${COLOURS.advisory}`,
+          marginBottom: 0, background: "#fff",
+        },
+      },
+        tabs.map(t =>
+          React.createElement("button", {
+            key: t.id,
+            onClick: () => onSelect(t.id),
+            style: {
+              padding: "10px 28px", fontSize: 14, fontWeight: 600,
+              background: activeTab === t.id ? COLOURS.advisory : "transparent",
+              color: activeTab === t.id ? "#fff" : COLOURS.advisory,
+              border: "none", borderBottom: "none", cursor: "pointer",
+              borderRadius: activeTab === t.id ? "6px 6px 0 0" : 0,
+              transition: "background 0.15s",
+            },
+          }, t.label)
+        )
+      );
+    }
+
+    function PinGate({ onUnlock }) {
+      const [pin, setPin] = useState("");
+      const [error, setError] = useState(false);
+
+      const attempt = () => {
+        if (pin === ADMIN_PIN) {
+          onUnlock();
+        } else {
+          setError(true);
+          setPin("");
+        }
+      };
+
+      return React.createElement("div", {
+        style: {
+          maxWidth: 360, margin: "80px auto", padding: 32,
+          background: "#fff", borderRadius: 12,
+          border: `1px solid ${COLOURS.advisory}`,
+          boxShadow: "0 4px 24px rgba(30,22,69,0.10)",
+          textAlign: "center",
+        },
+      },
+        React.createElement("div", {
+          style: { fontSize: 18, fontWeight: 700, color: COLOURS.advisory, marginBottom: 8 },
+        }, "Admin area"),
+        React.createElement("div", {
+          style: { fontSize: 13, color: COLOURS.captionText, marginBottom: 20 },
+        }, "Enter the admin PIN to manage data uploads."),
+        React.createElement("input", {
+          type: "password", autoComplete: "off", placeholder: "PIN",
+          value: pin,
+          onChange: e => { setPin(e.target.value); setError(false); },
+          onKeyDown: e => e.key === "Enter" && attempt(),
+          style: {
+            width: "100%", padding: "10px 14px", fontSize: 18,
+            border: `1px solid ${error ? "#e74c3c" : "#d1d5db"}`,
+            borderRadius: 6, marginBottom: 8, outline: "none",
+            letterSpacing: "0.3em", textAlign: "center", boxSizing: "border-box",
+          },
+        }),
+        error && React.createElement("div", {
+          style: { fontSize: 12, color: "#e74c3c", marginBottom: 10 },
+        }, "Incorrect PIN — try again."),
+        React.createElement("button", {
+          onClick: attempt,
+          style: {
+            background: COLOURS.advisory, color: "#fff", border: "none",
+            borderRadius: 6, padding: "10px 28px", fontSize: 14,
+            fontWeight: 600, cursor: "pointer", width: "100%",
+          },
+        }, "Unlock")
+      );
+    }
+
     // Module 1 — single ingestion zone; CSV/JSON routed by headers or filename
     function Module1({
       onData, onSettings, settings, fileName, dataInfo, onClearAll,
       onConvItems, onProjItems, onMemItems, onUsersOverlay,
-      onCodeRow, convCount, projCount, memCount, codeLines, codeFileName,
+      onCodeRow, convCount, projCount, memCount, codeLines, codeUsageRowCount, codeFileName,
       convSourceName, projSourceName, memSourceName, usersSourceName,
       refreshAud, audLoading, audRateUpdated,
     }) {
@@ -569,13 +779,18 @@ import {
               const dateRange = match ? `${match[1]} to ${match[2]}` : "Unknown period";
               onData(data, file.name, dateRange);
             }
+          } else if (kind === "code-api") {
+            const { row, errors } = parseCodeApiCSV(text);
+            if (errors.length) errs.push(errors[0]);
+            else if (!row) errs.push(`${file.name}: could not parse Claude Code API CSV`);
+            else onCodeRow(row, file.name);
           } else if (kind === "code") {
             const { row, errors } = parseCodeCSV(text);
             if (errors.length) errs.push(errors[0]);
             else if (!row || !row.email) errs.push(`${file.name}: could not parse Claude Code CSV row`);
             else onCodeRow(row, file.name);
           } else {
-            errs.push(`${file.name}: not Anthropic team CSV (needs user_email, model, product, …) nor Claude Code CSV (User, Spend, Lines)`);
+            errs.push(`${file.name}: not Anthropic team CSV (needs user_email, model, product, …) nor Claude Code CSV (legacy: User, Spend, Lines; API: usage_date_utc, model_version, workspace, …)`);
           }
           return errs;
         }
@@ -642,7 +857,22 @@ import {
           React.createElement("div", { style:{ fontSize:13, color:COLOURS.captionText, lineHeight:1.5 } },
             "Drop files here or click — ",
             React.createElement("strong", null, "one zone"),
-            " for Anthropic CSV, Claude Code CSV, and Claude.ai JSON exports."
+            " for Anthropic CSV, Claude Code (legacy team CSV or API token export), and Claude.ai JSON exports."
+          ),
+          React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:8 } },
+            "Claude Code API export: expected columns include ",
+            React.createElement("code", null, "usage_date_utc"),
+            ", ",
+            React.createElement("code", null, "model_version"),
+            ", ",
+            React.createElement("code", null, "workspace"),
+            ", ",
+            React.createElement("code", null, "usage_output_tokens"),
+            ", and input/cache token columns. Only rows with ",
+            React.createElement("code", null, "workspace"),
+            " = ",
+            React.createElement("code", null, "Claude Code"),
+            " are counted."
           ),
           React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:8 } },
             "CSV is detected from column headers. JSON files must be named like ",
@@ -667,7 +897,7 @@ import {
           manifestRow("Projects", projCount > 0, projCount > 0 ? `${fmt(projCount)} projects${projSourceName ? ` · ${projSourceName}` : ""}` : "— Not loaded"),
           manifestRow("Memories", memCount > 0, memCount > 0 ? `${fmt(memCount)} memories${memSourceName ? ` · ${memSourceName}` : ""}` : "— Not loaded"),
           manifestRow("Users (UUID map)", !!usersSourceName, usersSourceName ? `✓ ${usersSourceName}` : "— Not loaded"),
-          manifestRow("Claude Code CSV", !!codeFileName, codeFileName ? `${codeFileName}${codeLines ? ` · ${fmt(codeLines)} lines (first row)` : ""}` : "— Not loaded · does not affect fluency")
+          manifestRow("Claude Code (API export)", !!codeFileName, codeFileName ? `${codeFileName}${codeUsageRowCount ? ` · ${fmt(codeUsageRowCount)} usage rows` : codeLines ? ` · ${fmt(codeLines)} lines (legacy CSV)` : ""}` : "— Not loaded")
         ),
         React.createElement("div", { style:{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 } },
           React.createElement("button", {
@@ -838,7 +1068,7 @@ import {
     }
 
     // Module 4
-    function Module4({ users, onUpdateLimit, audRate, codeData }) {
+    function Module4({ users, onUpdateLimit, audRate }) {
       const [sortKey, setSortKey]   = useState("totalTokens");
       const [sortDir, setSortDir]   = useState("desc");
       const [expanded, setExpanded] = useState({});
@@ -869,15 +1099,11 @@ import {
         }
       }, tier === "Premium" ? "Premium" : "Standard");
 
-      const codeEmailKey = codeData && codeData.email
-        ? (Object.keys(USERS_MAP).find(k => k.toLowerCase() === String(codeData.email).toLowerCase()) || codeData.email)
-        : null;
-
       return React.createElement(Card, null,
         React.createElement(SectionHeader, { title:"Module 4 — User Spend & Token Breakdown" }),
-        codeData && React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:10 } },
-          React.createElement("strong", { style:{ color:COLOURS.advisory } }, "Claude Code (separate billing): "),
-          `${fmtUSD(codeData.spendUsd)} · ${fmt(codeData.codeLines)} lines — shown as an extra row; not included in org averages in Module 2.`
+        React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:10 } },
+          React.createElement("strong", { style:{ color:COLOURS.advisory } }, "Claude Code: "),
+          "API or legacy CSV spend is merged into the Travis Rowley row below (totals and Module 2). Claude Code remains separate from plan seat billing."
         ),
         React.createElement("div", { style:{ overflowX:"auto" } },
           React.createElement("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:12 } },
@@ -898,12 +1124,12 @@ import {
                 const utilColour = !u.spendUtilisation?"#9ca3af":u.spendUtilisation>90?"#dc2626":u.spendUtilisation>75?"#f59e0b":"#166534";
                 const limitVal = editLimit[u.email] !== undefined ? editLimit[u.email] : (u.spendLimit ?? "");
                 const rows = [
-                  React.createElement("tr", { key:u.email, style:{ borderBottom:"1px solid #f3f4f6", background:u.totalRequests===0?"#fafafa":"#fff", opacity:u.totalRequests===0?0.6:1 } },
+                  React.createElement("tr", { key:u.email, style:{ borderBottom:"1px solid #f3f4f6", background:u.totalRequests===0 && !(u.codeSpendUSD > 0)?"#fafafa":"#fff", opacity:u.totalRequests===0 && !(u.codeSpendUSD > 0)?0.6:1 } },
                     React.createElement("td", { style:{ padding:"6px 10px", fontWeight:600 } },
                       u.name,
                       u.isBenchmark && React.createElement("span", { style:{ fontSize:10, color:"#6b7280", marginLeft:4 } }, "(Benchmark)"),
                       u.fluencyTier===1 && React.createElement("span", { title:"Candidate internal AI trainer", style:{ marginLeft:4, fontSize:10, background:COLOURS.advisory, color:"#fff", padding:"1px 5px", borderRadius:9999 } }, "★ Super User"),
-                      u.totalRequests===0 && React.createElement("span", { style:{ fontSize:10, color:"#9ca3af", marginLeft:4 } }, "Not active this period")
+                      u.totalRequests===0 && !(u.codeSpendUSD > 0) && React.createElement("span", { style:{ fontSize:10, color:"#9ca3af", marginLeft:4 } }, "Not active this period")
                     ),
                     React.createElement("td", { style:{ padding:"6px 10px", color:"#6b7280" } }, u.entity),
                     React.createElement("td", { style:{ padding:"6px 10px" } }, seatBadge(u.seatTier || "Standard")),
@@ -924,31 +1150,13 @@ import {
                     ),
                     React.createElement("td", { style:{ padding:"6px 10px", color:utilColour, fontWeight:600 } }, u.spendUtilisation?`${fmtDec(u.spendUtilisation,0)}%`:"—"),
                     React.createElement("td", { style:{ padding:"6px 10px" } },
-                      u.totalRequests > 0 && React.createElement("button", {
+                      (u.totalRequests > 0 || u.codeSpendUSD > 0) && React.createElement("button", {
                         onClick:()=>setExpanded(p=>({...p,[u.email]:!p[u.email]})),
                         style:{ background:"none", border:"1px solid #d1d5db", borderRadius:4, padding:"2px 6px", fontSize:11, cursor:"pointer" }
                       }, isExpanded?"▲":"▼")
                     )
                   )
                 ];
-                if (codeData && codeEmailKey && u.email.toLowerCase() === codeEmailKey.toLowerCase()) {
-                  const codeAud = (codeData.spendUsd || 0) * audRate;
-                  rows.push(React.createElement("tr", { key:`${u.email}-code`, style:{ borderBottom:"1px solid #f3f4f6", background:"#fffbeb" } },
-                    React.createElement("td", { style:{ padding:"6px 10px", fontStyle:"italic", color:COLOURS.captionText } }, u.name, " (Claude Code)"),
-                    React.createElement("td", { style:{ padding:"6px 10px", fontSize:11, color:COLOURS.captionText } }, "Separate billing"),
-                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
-                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
-                    React.createElement("td", { style:{ padding:"6px 10px" } }, fmtAUD(codeAud)),
-                    React.createElement("td", { style:{ padding:"6px 10px" } }, fmtUSD(codeData.spendUsd)),
-                    React.createElement("td", { style:{ padding:"6px 10px", fontSize:11 } }, `${fmt(codeData.codeLines || 0)} lines`),
-                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
-                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
-                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
-                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
-                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
-                    React.createElement("td", { style:{ padding:"6px 10px" } }, "")
-                  ));
-                }
                 if (isExpanded) {
                   rows.push(React.createElement("tr", { key:`${u.email}-exp`, style:{ borderBottom:"1px solid #f3f4f6" } },
                     React.createElement("td", { colSpan:14, style:{ padding:"12px 20px", background:"#f8fafc" } },
@@ -978,6 +1186,13 @@ import {
                           React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:6 } }, `Prompt: ${fmtTokens(u.totalPromptTokens)}`),
                           React.createElement("div", { style:{ fontSize:11, color:"#9ca3af" } }, `Completion: ${fmtTokens(u.totalCompletionTokens)}`)
                         )
+                      ),
+                      (u.codeSpendUSD > 0) && React.createElement("div", { style:{ fontSize:11, color:COLOURS.captionText, marginTop:8 } },
+                        u.codeTokens > 0
+                          ? React.createElement("span", null, `Claude Code (API) — A$${fmtDec(u.codeSpendUSD * audRate, 2)} incl. above · ${fmt(u.codeTokens)} tokens`)
+                          : u.codeCsvLines > 0
+                            ? React.createElement("span", null, `Claude Code (legacy CSV) — A$${fmtDec(u.codeSpendUSD * audRate, 2)} incl. above · ${fmt(u.codeCsvLines)} lines`)
+                            : React.createElement("span", null, `Claude Code — A$${fmtDec(u.codeSpendUSD * audRate, 2)} incl. above`)
                       )
                     )
                   ));
@@ -1577,6 +1792,8 @@ Generated by Frank Group AI Governance Dashboard`);
       const [usersSourceName, setUsersSourceName] = useState(null);
       const [audLoading, setAudLoading] = useState(false);
       const [audRateUpdated, setAudRateUpdated] = useState(null);
+      const [activeTab, setActiveTab] = useState("dashboard");
+      const [adminUnlocked, setAdminUnlocked] = useState(false);
 
       const uuidMap = useMemo(() => mergeUuidMap(uuidOverlay), [uuidOverlay]);
 
@@ -1588,7 +1805,7 @@ Generated by Frank Group AI Governance Dashboard`);
       const rows = rawRows || SAMPLE_DATA;
 
       const users = useMemo(() => {
-        const agg = aggregateData(rows, settings.audRate, behavior);
+        const agg = aggregateData(rows, settings.audRate, behavior, codeData);
         return agg.map(u => {
           if (spendOverrides[u.email] !== undefined) {
             const limit = spendOverrides[u.email];
@@ -1596,7 +1813,7 @@ Generated by Frank Group AI Governance Dashboard`);
           }
           return u;
         });
-      }, [rows, settings.audRate, spendOverrides, behavior]);
+      }, [rows, settings.audRate, spendOverrides, behavior, codeData]);
 
       const metrics = useMemo(() => {
         const active   = users.filter(u=>u.totalRequests>0);
@@ -1653,6 +1870,25 @@ Generated by Frank Group AI Governance Dashboard`);
       const reportingPeriod = useMemo(() => formatReportingPeriod(rawRows, dateRange), [rawRows, dateRange]);
       const periodAccent = reportingPeriod.tone === "live" ? COLOURS.accent : reportingPeriod.tone === "demo" ? "#3a4a7c" : "#94a3b8";
 
+      const module1Props = {
+        onData: handleData, onSettings: updateSettings, settings, fileName, dataInfo, onClearAll: handleClearAll,
+        onConvItems: (items, name) => { setConvItems(items); setConvSourceName(name || null); },
+        onProjItems: (items, name) => { setProjItems(items); setProjSourceName(name || null); },
+        onMemItems: (items, name) => { setMemItems(items); setMemSourceName(name || null); },
+        onUsersOverlay: (map, meta, name) => {
+          setUuidOverlay(prev => ({ ...prev, ...map }));
+          setUserMetaByEmail(prev => ({ ...prev, ...meta }));
+          setUsersSourceName(name || null);
+        },
+        onCodeRow: (row, name) => { setCodeData(row); setCodeFileName(name); },
+        convCount: convItems.length, projCount: projItems.length, memCount: memItems.length,
+        codeLines: codeData ? codeData.codeLines : 0,
+        codeUsageRowCount: codeData && codeData.usageRowCount ? codeData.usageRowCount : 0,
+        codeFileName,
+        convSourceName, projSourceName, memSourceName, usersSourceName,
+        refreshAud, audLoading, audRateUpdated,
+      };
+
       return React.createElement("div", { style:{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", background:"#f1f5f9", minHeight:"100vh", padding:24, color:COLOURS.bodyText } },
         React.createElement("div", { style:{ background:COLOURS.advisory, color:"#fff", borderRadius:10, padding:"20px 28px", marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12, borderLeft:`6px solid ${COLOURS.accent}` } },
           React.createElement("div", null,
@@ -1674,31 +1910,36 @@ Generated by Frank Group AI Governance Dashboard`);
           React.createElement("div", { style:{ fontSize:11, fontWeight:700, color:COLOURS.advisory, textTransform:"uppercase", letterSpacing:1.2, marginBottom:6 } }, "Reporting period"),
           React.createElement("div", { style:{ fontSize:16, fontWeight:700, color:COLOURS.bodyText, lineHeight:1.4 } }, reportingPeriod.line)
         ),
+        React.createElement("div", { style:{ background:"#fff", border:"1px solid #e2e8f0", borderRadius:"8px 8px 0 0", overflow:"hidden", marginTop:4 } },
+          React.createElement(TabBar, { activeTab, onSelect: setActiveTab })
+        ),
         React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:20 } },
-          React.createElement(Module1, {
-            onData:handleData, onSettings:updateSettings, settings, fileName, dataInfo, onClearAll:handleClearAll,
-            onConvItems: (items, name) => { setConvItems(items); setConvSourceName(name || null); },
-            onProjItems: (items, name) => { setProjItems(items); setProjSourceName(name || null); },
-            onMemItems: (items, name) => { setMemItems(items); setMemSourceName(name || null); },
-            onUsersOverlay: (map, meta, name) => {
-              setUuidOverlay(prev => ({ ...prev, ...map }));
-              setUserMetaByEmail(prev => ({ ...prev, ...meta }));
-              setUsersSourceName(name || null);
+          activeTab === "admin" && (
+            adminUnlocked
+              ? React.createElement(Module1, module1Props)
+              : React.createElement(PinGate, { onUnlock: () => setAdminUnlocked(true) })
+          ),
+          activeTab === "dashboard" && React.createElement(React.Fragment, null,
+            !rawRows && React.createElement("div", {
+              style: {
+                background: "#f5f3ff", border: `1px solid ${COLOURS.advisory}`,
+                borderRadius: 8, padding: "16px 20px", margin: "20px 0 0",
+                fontSize: 14, color: COLOURS.advisory, textAlign: "center",
+              },
             },
-            onCodeRow: (row, name) => { setCodeData(row); setCodeFileName(name); },
-            convCount: convItems.length, projCount: projItems.length, memCount: memItems.length,
-            codeLines: codeData ? codeData.codeLines : 0, codeFileName,
-            convSourceName, projSourceName, memSourceName, usersSourceName,
-            refreshAud, audLoading, audRateUpdated,
-          }),
-          React.createElement(Module2, { users, settings, metrics, hasBehaviorData: behavior.hasBehaviorData }),
-          React.createElement(Module3, { users, metrics }),
-          React.createElement(Module4, { users, onUpdateLimit:updateLimit, audRate: settings.audRate, codeData }),
-          React.createElement(Module5, { users }),
-          React.createElement(Module7InitiativeTracker, { initiatives, setInitiatives, metrics }),
-          React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange }),
-          React.createElement(Module9Coaching, { users, metrics, hasBehaviorData: behavior.hasBehaviorData }),
-          React.createElement(Module6, { users, settings, dateRange })
+              "No data loaded yet. Go to the ",
+              React.createElement("strong", null, "Admin"),
+              " tab to upload CSV files."
+            ),
+            React.createElement(Module2, { users, settings, metrics, hasBehaviorData: behavior.hasBehaviorData }),
+            React.createElement(Module3, { users, metrics }),
+            React.createElement(Module4, { users, onUpdateLimit:updateLimit, audRate: settings.audRate }),
+            React.createElement(Module5, { users }),
+            React.createElement(Module7InitiativeTracker, { initiatives, setInitiatives, metrics }),
+            React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange }),
+            React.createElement(Module9Coaching, { users, metrics, hasBehaviorData: behavior.hasBehaviorData }),
+            React.createElement(Module6, { users, settings, dateRange })
+          )
         ),
         React.createElement("div", { style:{ textAlign:"center", color:"#9ca3af", fontSize:11, marginTop:24, paddingBottom:12 } }, "Frank Group AI Governance Dashboard · Phase 1.5 · Optional Claude report sends metrics to Anthropic; otherwise client-side only")
       );

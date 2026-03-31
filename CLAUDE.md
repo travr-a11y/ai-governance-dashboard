@@ -13,20 +13,31 @@
 ## File map
 
 ```
-index.html                  ← THE live file. All dashboard code is inline here (JSX via Babel standalone).
-package.json                ← Railway start command: npx serve . --listen $PORT --no-clipboard
-railway.toml                ← Railway deploy config
-.gitignore                  ← .DS_Store, .env, node_modules
-README.md                   ← Public-facing docs (GitHub)
-CLAUDE.md                   ← This file — session handoff for Claude Code
+index.html       ← THE live file. All dashboard code is inline here (JSX via Babel standalone).
+package.json     ← Railway start command: npx serve . --listen $PORT --no-clipboard
+railway.toml     ← Railway deploy config
+.gitignore       ← **/.DS_Store, .env, node_modules
+README.md        ← Public-facing docs (GitHub)
+CLAUDE.md        ← This file — primary context for coding agents
 
 src/
-  dashboard.jsx             ← Dev/reference copy (generated from index.html script — keep in sync)
+  dashboard.jsx  ← Dev/reference copy (keep in sync with index.html script block)
 
 docs/
-  DEPLOYMENT.md             ← Full git + Railway deploy workflow
-  PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md  ← Full product spec
-  PHASE_1_5_PLAN.md         ← Phase 1.5 design notes
+  DEPLOYMENT.md                                        ← Git + Railway deploy workflow
+  DIGITAL_FLUENCY_SCORING.md                           ← Fluency formula reference (keep in sync with index.html)
+  PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md ← Full product spec
+
+  tasks/                          ← Pending work items (one file per task)
+    TASK-01-code-csv-schema.md    ← New Claude Code API token CSV parser
+    TASK-02-ingestion-tab-password.md ← Admin tab + PIN gate
+    TASK-03-module2-fix.md        ← Module 2 stat label / org-fluency fix
+    TASK-04-module8-report.md     ← Module 8 native key + report quality
+    TASK-05-phase2-persistence.md ← Phase 2 Supabase persistence (large)
+
+  archive/                        ← Historical / superseded docs (read-only reference)
+    FRANK_HANDOFF_AIDashboard_2026-03-31.md ← Phase 1.5 session handoff (complete)
+    PHASE_1_5_PLAN.md             ← Phase 1.5 design plan (complete)
 ```
 
 **Important:** `index.html` is the source of truth. When making changes, edit `index.html`, then regenerate or sync `src/dashboard.jsx` (same `<script type="text/babel">` body with ESM imports + `export default App`).

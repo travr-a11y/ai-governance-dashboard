@@ -25,7 +25,7 @@ git status
 git diff
 
 # Stage specific files (never stage .env or node_modules)
-git add index.html dashboard.jsx    # add other files as needed
+git add index.html src/dashboard.jsx    # add other files as needed
 
 # Commit
 git commit -m "feat/fix/chore: description"
