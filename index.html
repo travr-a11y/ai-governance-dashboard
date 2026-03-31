@@ -341,9 +341,6 @@
         const uuid = it.accountUuid;
         if (!uuid || !uuidMap[uuid]) continue;
         const em = canonicalUserEmail(uuidMap[uuid]);
-        if (!Object.keys(USERS_MAP).some(k => k.toLowerCase() === em.toLowerCase()) && !USERS_MAP[em]) {
-          /* still allow if email matches domain users */
-        }
         const key = Object.keys(USERS_MAP).find(k => k.toLowerCase() === em.toLowerCase()) || em;
         if (!convByEmail[key]) convByEmail[key] = { names: [], depths: [], lastUpdate: null, count: 0 };
         const bucket = convByEmail[key];
