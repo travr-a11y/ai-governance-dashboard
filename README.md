@@ -17,7 +17,7 @@ A client-side React dashboard for monitoring Claude.ai Team usage across Frank A
 | 5 | **Product Analysis** | Spend by surface (Chat, Cowork, Research, Claude Code, etc.). Opus leverage callouts. |
 | 6 | **Savings Calculator** | Slider: migrate X% of Opus → Sonnet; projected AUD saving + annualised. Rendered at page bottom. |
 | 7 | **Initiative Tracker** | AI Committee initiatives with editable targets, auto status (green/amber/red), JSON export. |
-| 8 | **Report Generator** | AI-generated governance report (Claude API, BYOK) + Download .doc / Print-to-PDF / .txt. |
+| 8 | **Report Generator** | Template report + optional AI narrative (OpenRouter → Gemini 2.5 Pro, BYOK) + Download .doc / Print-to-PDF / .txt. |
 | 9 | **Coaching & Leaderboard** | Ranked fluency leaderboard, rule-based coaching cards, cross-team category spotlight. |
 
 ---
@@ -26,7 +26,7 @@ A client-side React dashboard for monitoring Claude.ai Team usage across Frank A
 
 - **Trav (operator):** Exports CSV weekly from Anthropic admin, uploads it, generates report for James.
 - **James (CEO/MD):** Receives the weekly report by email.
-- **AI Committee:** Monitors initiative progress (Module 8).
+- **AI Committee:** Monitors initiative progress (Module 7).
 - **8 team members:** Alex, Andrea, Reginald (Frank Advisory) + Tamara, Bahar, Ben, Rhys (Frank Law) + Trav.
 
 ---
@@ -93,7 +93,7 @@ docs/
   archive/                               ← Superseded planning docs
 ```
 
-**No build step.** Babel compiles JSX in-browser at load time. All data processing is client-side. No auth, no database. Optional API calls: `api.frankfurter.app` (live AUD/USD rate) and `api.anthropic.com` (Module 8 report generation — BYOK).
+**No build step.** Babel compiles JSX in-browser at load time. All data processing is client-side. No auth, no database. Optional API calls: `api.frankfurter.app` (live AUD/USD rate) and `openrouter.ai` (Module 8 AI narrative — BYOK).
 
 ---
 

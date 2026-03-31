@@ -17,6 +17,10 @@ import {
       "rlyons@franklaw.com.au":       { name: "Rhys", entity: "Frank Law" },
     };
 
+    const LOWER_EMAIL_TO_KEY = Object.fromEntries(
+      Object.keys(USERS_MAP).map(k => [k.toLowerCase(), k])
+    );
+
     const SPEND_LIMITS = {
       "alex@frankadvisory.com.au":    null,
       "andrea@frankadvisory.com.au":  null,
@@ -30,10 +34,20 @@ import {
 
     const MODEL_CLASS = {
       "claude_opus_4_6":            "Opus",
+      "claude-opus-4-6":            "Opus",
       "claude_opus_4_5_20251101":   "Opus",
+      "claude-opus-4-5-20251101":   "Opus",
       "claude_sonnet_4_6":          "Sonnet",
+      "claude-sonnet-4-6":          "Sonnet",
       "claude_sonnet_4_5_20250929": "Sonnet",
+      "claude-sonnet-4-5-20250929": "Sonnet",
       "claude_haiku_4_5_20251001":  "Haiku",
+      "claude-haiku-4-5-20251001":  "Haiku",
+      "claude-3-7-sonnet-20250219": "Sonnet",
+      "claude-3-5-sonnet-20241022": "Sonnet",
+      "claude-3-5-haiku-20241022":  "Haiku",
+      "claude-3-opus-20240229":     "Opus",
+      "claude-3-haiku-20240307":    "Haiku",
     };
 
     const CODE_MODEL_PRICING = {
@@ -87,10 +101,10 @@ import {
     const BILLING_STANDARD_SEATS = 8;
     const BILLING_PREMIUM_SEATS = 1;
 
-    /** Sonnet model for Module 8 AI report (Anthropic Messages API). */
-    const ANTHROPIC_REPORT_MODEL = "claude-sonnet-4-6";
+    /** Gemini 2.5 Pro via OpenRouter for Module 8 AI narrative. */
+    const OPENROUTER_REPORT_MODEL = "google/gemini-2.5-pro";
     /** Optional fallback for local builds only — never put a real key here on a public or Railway deploy (it ships to every visitor). Prefer the Module 8 paste field. */
-    const ANTHROPIC_REPORT_API_KEY = "";
+    const OPENROUTER_REPORT_API_KEY = "";
 
     const COACHING_KEYWORDS = [
       { re: /research|due diligence|dd\b/i, label: "research & diligence" },
@@ -146,17 +160,31 @@ import {
 
     // ─── CSV Parser ───────────────────────────────────────────────────────────────
 
+    function parseCSVLine(line) {
+      const out = [];
+      let cur = "";
+      let inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === "\"") { inQ = !inQ; continue; }
+        if (c === "," && !inQ) { out.push(cur.trim()); cur = ""; continue; }
+        cur += c;
+      }
+      out.push(cur.trim());
+      return out.map(s => s.replace(/^"|"$/g, ""));
+    }
+
     function parseCSV(text) {
       const lines = text.trim().split(/\r?\n/);
       if (lines.length < 2) return { data: [], errors: ["File appears empty"] };
-      const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+      const headers = parseCSVLine(lines[0].replace(/^\uFEFF/, "")).map(h => h.trim());
       const required = ["user_email","model","product","total_requests","total_prompt_tokens","total_completion_tokens","total_net_spend_usd"];
       const missing = required.filter(r => !headers.includes(r));
       if (missing.length > 0) return { data: [], errors: [`Missing columns: ${missing.join(", ")}`] };
       const data = [];
       for (let i = 1; i < lines.length; i++) {
         if (!lines[i].trim()) continue;
-        const vals = lines[i].split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+        const vals = parseCSVLine(lines[i]);
         const row = {};
         headers.forEach((h, idx) => { row[h] = vals[idx] ?? ""; });
         ["total_requests","total_prompt_tokens","total_completion_tokens","total_net_spend_usd","total_gross_spend_usd"].forEach(f => { row[f] = parseFloat(row[f]) || 0; });
@@ -171,7 +199,7 @@ import {
 
     function canonicalUserEmail(raw) {
       if (!raw) return null;
-      const found = Object.keys(USERS_MAP).find(k => k.toLowerCase() === String(raw).toLowerCase());
+      const found = LOWER_EMAIL_TO_KEY[String(raw).toLowerCase()];
       return found || raw;
     }
 
@@ -257,20 +285,6 @@ import {
       } catch (e) {
         return { map: {}, metaByEmail: {}, errors: [String(e.message || e)] };
       }
-    }
-
-    function parseCSVLine(line) {
-      const out = [];
-      let cur = "";
-      let inQ = false;
-      for (let i = 0; i < line.length; i++) {
-        const c = line[i];
-        if (c === "\"") { inQ = !inQ; continue; }
-        if (c === "," && !inQ) { out.push(cur.trim()); cur = ""; continue; }
-        cur += c;
-      }
-      out.push(cur.trim());
-      return out.map(s => s.replace(/^"|"$/g, ""));
     }
 
     function parseCodeCSV(text) {
@@ -440,7 +454,7 @@ import {
         const uuid = it.accountUuid;
         if (!uuid || !uuidMap[uuid]) continue;
         const em = canonicalUserEmail(uuidMap[uuid]);
-        const key = Object.keys(USERS_MAP).find(k => k.toLowerCase() === em.toLowerCase()) || em;
+        const key = LOWER_EMAIL_TO_KEY[em.toLowerCase()] || em;
         if (!convByEmail[key]) convByEmail[key] = { names: [], depths: [], lastUpdate: null, count: 0 };
         const bucket = convByEmail[key];
         bucket.count++;
@@ -461,7 +475,7 @@ import {
         const uuid = p.creatorUuid;
         if (!uuid || !uuidMap[uuid]) continue;
         const em = canonicalUserEmail(uuidMap[uuid]);
-        const key = Object.keys(USERS_MAP).find(k => k.toLowerCase() === em.toLowerCase()) || em;
+        const key = LOWER_EMAIL_TO_KEY[em.toLowerCase()] || em;
         if (!projByEmail[key]) projByEmail[key] = { count: 0, customPrompts: 0, docCount: 0, privateCount: 0 };
         const b = projByEmail[key];
         b.count++;
@@ -474,7 +488,7 @@ import {
         const uuid = m.accountUuid;
         if (!uuid || !uuidMap[uuid]) continue;
         const em = canonicalUserEmail(uuidMap[uuid]);
-        const key = Object.keys(USERS_MAP).find(k => k.toLowerCase() === em.toLowerCase()) || em;
+        const key = LOWER_EMAIL_TO_KEY[em.toLowerCase()] || em;
         memByEmail[key] = { memoryLen: m.memoryLen || 0 };
       }
 
@@ -489,7 +503,7 @@ import {
       const byUser = {};
       rows.forEach(row => {
         const emailRaw = row.user_email || "";
-        const mapKey = Object.keys(USERS_MAP).find(k => k.toLowerCase() === emailRaw.toLowerCase()) || emailRaw;
+        const mapKey = LOWER_EMAIL_TO_KEY[emailRaw.toLowerCase()] || emailRaw;
         if (!byUser[mapKey]) {
           byUser[mapKey] = { email: mapKey, modelBreakdown: {}, productBreakdown: {}, totalSpendUSD: 0, totalPromptTokens: 0, totalCompletionTokens: 0, totalRequests: 0 };
         }
@@ -518,9 +532,7 @@ import {
 
       const allUsers = Object.values(byUser);
       if (codeRow && codeRow.email) {
-        const travisKey = Object.keys(USERS_MAP).find(
-          k => k.toLowerCase() === codeRow.email.toLowerCase()
-        );
+        const travisKey = LOWER_EMAIL_TO_KEY[codeRow.email.toLowerCase()];
         const travisUser = allUsers.find(u => u.email?.toLowerCase() === travisKey?.toLowerCase());
         if (travisUser) {
           travisUser.totalSpendUSD += codeRow.spendUsd || 0;
@@ -546,7 +558,7 @@ import {
         : 1;
 
       return allUsers.map(u => {
-        const mapKey = Object.keys(USERS_MAP).find(k => k.toLowerCase() === u.email.toLowerCase());
+        const mapKey = LOWER_EMAIL_TO_KEY[u.email.toLowerCase()];
         const info = mapKey ? USERS_MAP[mapKey] : null;
         const emailKey = mapKey || u.email;
         const totalTokens = u.totalPromptTokens + u.totalCompletionTokens;
@@ -612,7 +624,7 @@ import {
     }
 
     function hydrateUserFromPeriodRow(pu, audRate) {
-      const mapKey = Object.keys(USERS_MAP).find(k => k.toLowerCase() === String(pu.email || "").toLowerCase());
+      const mapKey = LOWER_EMAIL_TO_KEY[String(pu.email || "").toLowerCase()];
       const info = mapKey ? USERS_MAP[mapKey] : null;
       const totalSpendUSD = Number(pu.total_spend_usd) || 0;
       const totalTokens = Number(pu.total_tokens) || 0;
@@ -1116,7 +1128,7 @@ import {
           manifestRow("Projects", projCount > 0, projCount > 0 ? `${fmt(projCount)} projects${projSourceName ? ` · ${projSourceName}` : ""}` : "— Not loaded"),
           manifestRow("Memories", memCount > 0, memCount > 0 ? `${fmt(memCount)} memories${memSourceName ? ` · ${memSourceName}` : ""}` : "— Not loaded"),
           manifestRow("Users (UUID map)", !!usersSourceName, usersSourceName ? `✓ ${usersSourceName}` : "— Not loaded"),
-          manifestRow("Claude Code (API export)", !!codeFileName, codeFileName ? `${codeFileName}${codeUsageRowCount ? ` · ${fmt(codeUsageRowCount)} usage rows` : codeLines ? ` · ${fmt(codeLines)} lines (legacy CSV)` : ""}` : "— Not loaded")
+          manifestRow("Claude Code (API export)", !!codeFileName, codeFileName ? `${codeFileName}${codeUsageRowCount ? ` · ${fmt(codeUsageRowCount)} usage rows · Code API attributed to benchmark seat` : codeLines ? ` · ${fmt(codeLines)} lines (legacy CSV)` : ""}` : "— Not loaded")
         ),
         React.createElement("div", { style:{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 } },
           React.createElement("button", {
@@ -1377,7 +1389,7 @@ import {
         React.createElement(SectionHeader, { title:"Module 4 — User Spend & Token Breakdown" }),
         React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:10 } },
           React.createElement("strong", { style:{ color:COLOURS.advisory } }, "Claude Code: "),
-          "API or legacy CSV spend is merged into the Travis Rowley row below (totals and Module 2). Claude Code remains separate from plan seat billing."
+          "API or legacy CSV spend is merged into the Travis Rowley row below (totals and Module 2). Workspace-level Code API exports have no per-user column; that usage is attributed to the benchmark seat. Claude Code remains separate from plan seat billing."
         ),
         React.createElement("div", { style:{ overflowX:"auto" } },
           React.createElement("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:12 } },
@@ -1470,7 +1482,7 @@ import {
                       ),
                       (u.codeSpendUSD > 0) && React.createElement("div", { style:{ fontSize:11, color:COLOURS.captionText, marginTop:8 } },
                         u.codeTokens > 0
-                          ? React.createElement("span", null, `Claude Code (API) — A$${fmtDec(u.codeSpendUSD * audRate, 2)} incl. above · ${fmt(u.codeTokens)} tokens`)
+                          ? React.createElement("span", null, `Claude Code (API) — A$${fmtDec(u.codeSpendUSD * audRate, 2)} incl. above · ${fmt(u.codeTokens)} tokens · benchmark seat attribution`)
                           : u.codeCsvLines > 0
                             ? React.createElement("span", null, `Claude Code (legacy CSV) — A$${fmtDec(u.codeSpendUSD * audRate, 2)} incl. above · ${fmt(u.codeCsvLines)} lines`)
                             : React.createElement("span", null, `Claude Code — A$${fmtDec(u.codeSpendUSD * audRate, 2)} incl. above`)
@@ -1939,10 +1951,10 @@ Generated by Frank Group AI Governance Dashboard`);
         setTimeout(() => { try { w.print(); } catch (e) {} }, 300);
       };
 
-      const generateWithClaude = async () => {
-        const key = (reportApiKey || ANTHROPIC_REPORT_API_KEY || "").trim();
+      const generateWithAI = async () => {
+        const key = (reportApiKey || OPENROUTER_REPORT_API_KEY || "").trim();
         if (!key) {
-          setAiError("Add an Anthropic API key in the field below (recommended), or set ANTHROPIC_REPORT_API_KEY only for a trusted local copy that is never pushed or deployed publicly.");
+          setAiError("Add an OpenRouter API key in the field below (recommended), or set OPENROUTER_REPORT_API_KEY only for a trusted local copy that is never pushed or deployed publicly.");
           return;
         }
         setAiLoading(true);
@@ -1953,19 +1965,21 @@ Generated by Frank Group AI Governance Dashboard`);
         };
         try {
           const payload = buildReportMetricsPayload(users, metrics, initiatives, settings, dateRange, hasBehaviorData);
-          const res = await fetch("https://api.anthropic.com/v1/messages", {
+          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "x-api-key": key,
-              "anthropic-version": "2023-06-01",
-              "anthropic-dangerous-direct-browser-access": "true",
+              "Authorization": `Bearer ${key}`,
+              "HTTP-Referer": typeof window !== "undefined" ? window.location.origin : "",
+              "X-Title": "Frank Group AI Governance Dashboard",
             },
             body: JSON.stringify({
-              model: ANTHROPIC_REPORT_MODEL,
+              model: OPENROUTER_REPORT_MODEL,
               max_tokens: 8192,
-              system: REPORT_CLAUDE_SYSTEM,
-              messages: [{ role: "user", content: "Use this JSON as the sole source of quantitative facts:\n\n" + payload }],
+              messages: [
+                { role: "system", content: REPORT_CLAUDE_SYSTEM.join("\n") },
+                { role: "user", content: "Use this JSON as the sole source of quantitative facts:\n\n" + payload },
+              ],
             }),
           });
           const raw = await res.text();
@@ -1980,10 +1994,14 @@ Generated by Frank Group AI Governance Dashboard`);
             }
             return;
           }
-          const blocks = Array.isArray(data.content) ? data.content : [];
-          const text = blocks.filter(c => c.type === "text").map(c => c.text).join("\n").trim();
+          const msg = data?.choices?.[0]?.message;
+          let text = "";
+          if (typeof msg?.content === "string") text = msg.content.trim();
+          else if (Array.isArray(msg?.content)) {
+            text = msg.content.filter(c => c.type === "text").map(c => c.text || "").join("\n").trim();
+          }
           if (!text) {
-            fallbackTemplate("Empty response from Claude. Showing template report below.");
+            fallbackTemplate("Empty response from model. Showing template report below.");
             return;
           }
           setReport(text);
@@ -1997,31 +2015,35 @@ Generated by Frank Group AI Governance Dashboard`);
       return React.createElement(Card, null,
         React.createElement(SectionHeader, { title:"Module 8 — Report Generator" }),
         React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:12, lineHeight:1.5 } },
-          "Generate an AI report from aggregated dashboard metrics (sent to Anthropic for narrative generation only — no conversation bodies). ",
-          "Then copy, download Word-compatible .doc, plain .txt, or Print / Save as PDF. ",
-          "If the API is unavailable, a template report is filled in automatically."
+          "Generate an AI narrative from aggregated dashboard metrics via OpenRouter (Gemini 2.5 Pro) — metrics only, no conversation bodies. ",
+          "Or use the template button without a key. Then copy, download Word-compatible .doc, plain .txt, or Print / Save as PDF. ",
+          "If the API is unavailable, a template report can be filled in automatically."
         ),
         React.createElement("div", { style:{ marginBottom:14 } },
-          React.createElement("label", { htmlFor:"module8-anthropic-key", style:{ display:"block", fontSize:12, fontWeight:600, color:COLOURS.bodyText, marginBottom:6 } }, "Anthropic API key (this tab only)"),
+          React.createElement("label", { htmlFor:"module8-openrouter-key", style:{ display:"block", fontSize:12, fontWeight:600, color:COLOURS.bodyText, marginBottom:6 } }, "OpenRouter API key (this tab only)"),
           React.createElement("input", {
-            id:"module8-anthropic-key",
+            id:"module8-openrouter-key",
             type:"password",
             autoComplete:"off",
             value: reportApiKey,
             onChange: e => setReportApiKey(e.target.value),
-            placeholder:"sk-ant-api03-…",
+            placeholder:"sk-or-v1-…",
             style:{ width:"100%", maxWidth:480, boxSizing:"border-box", padding:"8px 12px", fontSize:13, border:`1px solid #e5e7eb`, borderRadius:6, fontFamily:"ui-monospace, monospace" }
           }),
           React.createElement("div", { style:{ fontSize:11, color:COLOURS.captionText, marginTop:6, lineHeight:1.45 } },
-            "Key is kept in memory for this session only (cleared on reload). Do not commit API keys to git or ship them in deployed HTML."
+            "Create a key at openrouter.ai. Kept in memory for this session only (cleared on reload). Do not commit API keys to git or ship them in deployed HTML."
           )
         ),
         aiError && React.createElement("div", { style:{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6, padding:"10px 14px", fontSize:12, color:"#b91c1c", marginBottom:12, whiteSpace:"pre-wrap" } }, aiError),
         React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:10, marginBottom:16, alignItems:"center" } },
           React.createElement("button", {
-            type:"button", onClick: generateWithClaude, disabled: aiLoading,
+            type:"button", onClick: generate, disabled: aiLoading,
+            style:{ background:"#fff", color:COLOURS.advisory, border:`1px solid ${COLOURS.advisory}`, borderRadius:6, padding:"10px 20px", fontSize:13, fontWeight:600, cursor: aiLoading ? "wait" : "pointer" }
+          }, "Generate template report"),
+          React.createElement("button", {
+            type:"button", onClick: generateWithAI, disabled: aiLoading,
             style:{ background:COLOURS.advisory, color:"#fff", border:"none", borderRadius:6, padding:"10px 20px", fontSize:13, fontWeight:600, cursor: aiLoading ? "wait" : "pointer", opacity: aiLoading ? 0.7 : 1 }
-          }, aiLoading ? "Generating report…" : "Generate Report"),
+          }, aiLoading ? "Generating report…" : "Generate with Gemini"),
           report.trim() && React.createElement("button", { onClick:downloadWord, style:{ background:COLOURS.accent, color:"#1a1a1a", border:"none", borderRadius:6, padding:"10px 16px", fontSize:13, fontWeight:700, cursor:"pointer" } }, "Download .doc (Word)"),
           report.trim() && React.createElement("button", { onClick:printPdf, style:{ background:"#fff", color:COLOURS.advisory, border:`1px solid ${COLOURS.advisory}`, borderRadius:6, padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer" } }, "Print / PDF"),
           report.trim() && React.createElement("button", { onClick:downloadTxt, style:{ background:"#fff", color:"#374151", border:"1px solid #d1d5db", borderRadius:6, padding:"10px 16px", fontSize:13, cursor:"pointer" } }, "Download .txt"),
