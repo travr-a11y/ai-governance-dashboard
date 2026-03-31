@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Frank Group AI Governance Dashboard</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #f1f5f9; }
+    input[type=range] { cursor: pointer; accent-color: #1a3a5c; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f1f5f9; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    const {
+      useState, useCallback, useMemo
+    } = React;
+
+    const {
+      PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis,
+      Tooltip, ResponsiveContainer, Legend
+    } = Recharts;
+
+    // ─── Constants ───────────────────────────────────────────────────────────────
+
+    const USERS_MAP = {
+      "trowley@frankadvisory.com.au": { name: "Travis Rowley", entity: "Frank Advisory", isBenchmark: true },
+      "alex@frankadvisory.com.au":    { name: "Alex", entity: "Frank Advisory" },
+      "andrea@frankadvisory.com.au":  { name: "Andrea", entity: "Frank Advisory" },
+      "rsharma@frankadvisory.com.au": { name: "Reginald", entity: "Frank Advisory" },
+      "tbrcic@franklaw.com.au":       { name: "Tamara", entity: "Frank Law" },
+      "bagar@franklaw.com.au":        { name: "Bahar", entity: "Frank Law" },
+      "bwoodward@franklaw.com.au":    { name: "Ben", entity: "Frank Law" },
+      "rlyons@franklaw.com.au":       { name: "Rhys", entity: "Frank Law" },
+    };
+
+    const SPEND_LIMITS = {
+      "alex@frankadvisory.com.au":    null,
+      "andrea@frankadvisory.com.au":  null,
+      "bagar@franklaw.com.au":        20,
+      "bwoodward@franklaw.com.au":    null,
+      "rlyons@franklaw.com.au":       50,
+      "rsharma@frankadvisory.com.au": 190,
+      "tbrcic@franklaw.com.au":       10,
+      "trowley@frankadvisory.com.au": null,
+    };
+
+    const MODEL_CLASS = {
+      "claude_opus_4_6":            "Opus",
+      "claude_opus_4_5_20251101":   "Opus",
+      "claude_sonnet_4_6":          "Sonnet",
+      "claude_sonnet_4_5_20250929": "Sonnet",
+      "claude_haiku_4_5_20251001":  "Haiku",
+    };
+
+    const COLOURS = {
+      opus:    "#e74c3c",
+      sonnet:  "#2d7d5f",
+      haiku:   "#3a86c8",
+      advisory:"#1a3a5c",
+      law:     "#2d7d5f",
+      tier1:   "#1a3a5c",
+      tier2:   "#2d7d5f",
+      tier3:   "#f59e0b",
+      tier4:   "#9ca3af",
+    };
+
+    const MODEL_RECOMMENDATIONS = [
+      { task: "Daily Cowork sessions, drafting, emails", model: "Sonnet", reason: "Fast, sufficient quality, 1/5 Opus cost" },
+      { task: "Sheet Agent data processing",             model: "Sonnet or Haiku", reason: "Repetitive; Opus overkill" },
+      { task: "Research queries",                        model: "Sonnet", reason: "Most research doesn't need Opus reasoning depth" },
+      { task: "Complex M&A analysis, LBO logic",         model: "Opus", reason: "High-stakes, multi-step reasoning" },
+      { task: "Contract review (complex)",               model: "Opus", reason: "Nuance and accuracy critical" },
+      { task: "Claude Code (general)",                   model: "Sonnet", reason: "Code generation is Sonnet-sufficient" },
+      { task: "Claude Code (complex architecture)",      model: "Opus", reason: "Deliberate choice only" },
+      { task: "Chat — quick questions",                  model: "Haiku or Sonnet", reason: "Reserve Opus for deep work" },
+    ];
+
+    const DEFAULT_INITIATIVES = [
+      { id: "1", name: "Get all 8 seats active",             owner: "Trav",        targetMetric: "active_users_count",    targetValue: 8,          lowerIsBetter: false, statusOverride: null },
+      { id: "2", name: "Frank Law onboarding",               owner: "Trav",        targetMetric: "frank_law_adoption_pct",targetValue: 100,        lowerIsBetter: false, statusOverride: null },
+      { id: "3", name: "Sonnet as default model",            owner: "AI Committee",targetMetric: "org_opus_pct",          targetValue: 50,         lowerIsBetter: true,  statusOverride: null },
+      { id: "4", name: "Average fluency score",              owner: "AI Committee",targetMetric: "avg_fluency_score",     targetValue: 60,         lowerIsBetter: false, statusOverride: null },
+      { id: "5", name: "Team token milestone (org AI depth)",owner: "Trav",        targetMetric: "total_tokens",          targetValue: 1000000000, lowerIsBetter: false, statusOverride: null },
+    ];
+
+    // ─── Sample Data ──────────────────────────────────────────────────────────────
+
+    const SAMPLE_DATA = [
+      { user_email:"trowley@frankadvisory.com.au", product:"Cowork",       model:"claude_opus_4_6",          total_requests:45,  total_prompt_tokens:2800000,  total_completion_tokens:420000,  total_net_spend_usd:38.50 },
+      { user_email:"trowley@frankadvisory.com.au", product:"Cowork",       model:"claude_sonnet_4_6",        total_requests:62,  total_prompt_tokens:1900000,  total_completion_tokens:280000,  total_net_spend_usd:8.20 },
+      { user_email:"trowley@frankadvisory.com.au", product:"Claude Code",  model:"claude_sonnet_4_6",        total_requests:120, total_prompt_tokens:3200000,  total_completion_tokens:540000,  total_net_spend_usd:14.60 },
+      { user_email:"trowley@frankadvisory.com.au", product:"Research",     model:"claude_sonnet_4_6",        total_requests:18,  total_prompt_tokens:680000,   total_completion_tokens:95000,   total_net_spend_usd:3.10 },
+      { user_email:"alex@frankadvisory.com.au",    product:"Cowork",       model:"claude_opus_4_6",          total_requests:310, total_prompt_tokens:180000000,total_completion_tokens:8500000, total_net_spend_usd:280.00 },
+      { user_email:"alex@frankadvisory.com.au",    product:"Chat",         model:"claude_opus_4_6",          total_requests:28,  total_prompt_tokens:4200000,  total_completion_tokens:620000,  total_net_spend_usd:18.90 },
+      { user_email:"alex@frankadvisory.com.au",    product:"Research",     model:"claude_sonnet_4_6",        total_requests:12,  total_prompt_tokens:890000,   total_completion_tokens:120000,  total_net_spend_usd:3.20 },
+      { user_email:"rsharma@frankadvisory.com.au", product:"Cowork",       model:"claude_opus_4_6",          total_requests:8,   total_prompt_tokens:9800000,  total_completion_tokens:1200000, total_net_spend_usd:82.00 },
+      { user_email:"rsharma@frankadvisory.com.au", product:"Sheet Agent",  model:"claude_opus_4_6",          total_requests:3,   total_prompt_tokens:4500000,  total_completion_tokens:480000,  total_net_spend_usd:36.00 },
+      { user_email:"andrea@frankadvisory.com.au",  product:"Cowork",       model:"claude_sonnet_4_6",        total_requests:22,  total_prompt_tokens:540000,   total_completion_tokens:88000,   total_net_spend_usd:2.40 },
+      { user_email:"andrea@frankadvisory.com.au",  product:"Chat",         model:"claude_haiku_4_5_20251001",total_requests:35,  total_prompt_tokens:220000,   total_completion_tokens:42000,   total_net_spend_usd:0.30 },
+      { user_email:"tbrcic@franklaw.com.au",        product:"Chat",         model:"claude_opus_4_6",          total_requests:5,   total_prompt_tokens:180000,   total_completion_tokens:28000,   total_net_spend_usd:2.10 },
+      { user_email:"tbrcic@franklaw.com.au",        product:"Cowork",       model:"claude_sonnet_4_6",        total_requests:8,   total_prompt_tokens:210000,   total_completion_tokens:34000,   total_net_spend_usd:0.95 },
+    ];
+
+    // ─── CSV Parser ───────────────────────────────────────────────────────────────
+
+    function parseCSV(text) {
+      const lines = text.trim().split(/\r?\n/);
+      if (lines.length < 2) return { data: [], errors: ["File appears empty"] };
+      const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+      const required = ["user_email","model","product","total_requests","total_prompt_tokens","total_completion_tokens","total_net_spend_usd"];
+      const missing = required.filter(r => !headers.includes(r));
+      if (missing.length > 0) return { data: [], errors: [`Missing columns: ${missing.join(", ")}`] };
+      const data = [];
+      for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        const vals = lines[i].split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+        const row = {};
+        headers.forEach((h, idx) => { row[h] = vals[idx] ?? ""; });
+        ["total_requests","total_prompt_tokens","total_completion_tokens","total_net_spend_usd","total_gross_spend_usd"].forEach(f => { row[f] = parseFloat(row[f]) || 0; });
+        data.push(row);
+      }
+      return { data, errors: [] };
+    }
+
+    // ─── Aggregation ──────────────────────────────────────────────────────────────
+
+    function aggregateData(rows, audRate) {
+      const byUser = {};
+      rows.forEach(row => {
+        const emailRaw = row.user_email || "";
+        const mapKey = Object.keys(USERS_MAP).find(k => k.toLowerCase() === emailRaw.toLowerCase()) || emailRaw;
+        if (!byUser[mapKey]) {
+          byUser[mapKey] = { email: mapKey, modelBreakdown: {}, productBreakdown: {}, totalSpendUSD: 0, totalPromptTokens: 0, totalCompletionTokens: 0, totalRequests: 0 };
+        }
+        const u = byUser[mapKey];
+        u.totalSpendUSD         += row.total_net_spend_usd || 0;
+        u.totalPromptTokens     += row.total_prompt_tokens || 0;
+        u.totalCompletionTokens += row.total_completion_tokens || 0;
+        u.totalRequests         += row.total_requests || 0;
+        const cls = MODEL_CLASS[row.model] || "Other";
+        if (!u.modelBreakdown[cls]) u.modelBreakdown[cls] = { spend:0, tokens:0, requests:0 };
+        u.modelBreakdown[cls].spend    += row.total_net_spend_usd || 0;
+        u.modelBreakdown[cls].tokens   += (row.total_prompt_tokens||0) + (row.total_completion_tokens||0);
+        u.modelBreakdown[cls].requests += row.total_requests || 0;
+        const prod = row.product || "Unknown";
+        if (!u.productBreakdown[prod]) u.productBreakdown[prod] = { spend:0, tokens:0, requests:0 };
+        u.productBreakdown[prod].spend    += row.total_net_spend_usd || 0;
+        u.productBreakdown[prod].tokens   += (row.total_prompt_tokens||0) + (row.total_completion_tokens||0);
+        u.productBreakdown[prod].requests += row.total_requests || 0;
+      });
+
+      Object.keys(USERS_MAP).forEach(k => {
+        if (!Object.keys(byUser).find(e => e.toLowerCase() === k.toLowerCase())) {
+          byUser[k] = { email:k, modelBreakdown:{}, productBreakdown:{}, totalSpendUSD:0, totalPromptTokens:0, totalCompletionTokens:0, totalRequests:0 };
+        }
+      });
+
+      const allUsers = Object.values(byUser);
+      const activeUsers = allUsers.filter(u => u.totalRequests > 0);
+      const orgAvgTokens = activeUsers.length > 0
+        ? activeUsers.reduce((s,u) => s + u.totalPromptTokens + u.totalCompletionTokens, 0) / activeUsers.length
+        : 1;
+
+      return allUsers.map(u => {
+        const mapKey = Object.keys(USERS_MAP).find(k => k.toLowerCase() === u.email.toLowerCase());
+        const info = mapKey ? USERS_MAP[mapKey] : null;
+        const totalTokens = u.totalPromptTokens + u.totalCompletionTokens;
+        const opusSpend = u.modelBreakdown["Opus"]?.spend || 0;
+        const opusPct = u.totalSpendUSD > 0 ? (opusSpend / u.totalSpendUSD) * 100 : 0;
+        const surfaceCount = Object.keys(u.productBreakdown).length;
+        const tokenVolumeScore = Math.min(100, (totalTokens / orgAvgTokens) * 50);
+        const surfaceDiversityScore = Math.min(100, surfaceCount * 20);
+        const recencyScore = u.totalRequests > 0 ? 100 : 0;
+        const fluencyScore = tokenVolumeScore * 0.5 + surfaceDiversityScore * 0.3 + recencyScore * 0.2;
+        const fluencyTier = fluencyScore >= 70 ? 1 : fluencyScore >= 40 ? 2 : fluencyScore >= 10 ? 3 : 4;
+        const limitKey = Object.keys(SPEND_LIMITS).find(k => k.toLowerCase() === u.email.toLowerCase());
+        const spendLimit = limitKey !== undefined ? SPEND_LIMITS[limitKey] : undefined;
+        const spendAUD = u.totalSpendUSD * audRate;
+        const spendUtilisation = spendLimit ? (spendAUD / spendLimit) * 100 : null;
+        let entity = info?.entity;
+        if (!entity) {
+          if (u.email.toLowerCase().includes("frankadvisory")) entity = "Frank Advisory";
+          else if (u.email.toLowerCase().includes("franklaw")) entity = "Frank Law";
+          else entity = "Unknown Entity";
+        }
+        return {
+          email: u.email, name: info?.name || u.email, entity, isBenchmark: info?.isBenchmark || false,
+          totalSpendUSD: u.totalSpendUSD, totalSpendAUD: spendAUD,
+          totalPromptTokens: u.totalPromptTokens, totalCompletionTokens: u.totalCompletionTokens,
+          totalTokens, totalRequests: u.totalRequests,
+          avgTokensPerRequest: u.totalRequests > 0 ? totalTokens / u.totalRequests : 0,
+          modelBreakdown: u.modelBreakdown, productBreakdown: u.productBreakdown,
+          opusPct, surfaceCount, fluencyScore, fluencyTier,
+          spendLimit: spendLimit ?? null, spendUtilisation,
+        };
+      }).sort((a,b) => b.totalTokens - a.totalTokens);
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+    const fmt      = n => (n == null || isNaN(n)) ? "0" : n.toLocaleString(undefined, { maximumFractionDigits:0 });
+    const fmtDec   = (n,d=1) => (n == null || isNaN(n)) ? "0" : (+n).toFixed(d);
+    const fmtUSD   = n => `$${fmtDec(n||0,2)}`;
+    const fmtAUD   = n => `A$${fmtDec(n||0,2)}`;
+    const fmtTokens = n => {
+      if (!n) return "0";
+      if (n >= 1e9) return `${fmtDec(n/1e9,1)}B`;
+      if (n >= 1e6) return `${fmtDec(n/1e6,1)}M`;
+      if (n >= 1e3) return `${fmtDec(n/1e3,1)}K`;
+      return `${n}`;
+    };
+    const tierLabel  = t => (["","Super User","Active","Getting Started","Not Started"])[t] || "";
+    const tierColour = t => ([COLOURS.tier4, COLOURS.tier1, COLOURS.tier2, COLOURS.tier3, COLOURS.tier4])[t] || COLOURS.tier4;
+
+    // ─── Components ──────────────────────────────────────────────────────────────
+
+    function Badge({ tier }) {
+      const colors = { 1:"#1a3a5c", 2:"#2d7d5f", 3:"#f59e0b", 4:"#9ca3af" };
+      return React.createElement("span", {
+        style:{ background:colors[tier], color:"#fff", padding:"2px 8px", borderRadius:9999, fontSize:11, fontWeight:600, whiteSpace:"nowrap" }
+      }, tier===1 ? "★ " + tierLabel(tier) : tierLabel(tier));
+    }
+
+    function SectionHeader({ title }) {
+      return React.createElement("div", { style:{ borderBottom:"2px solid #1a3a5c", marginBottom:16, paddingBottom:6 } },
+        React.createElement("h2", { style:{ margin:0, fontSize:16, fontWeight:700, color:"#1a3a5c", textTransform:"uppercase", letterSpacing:1 } }, title)
+      );
+    }
+
+    function Card({ children, style }) {
+      return React.createElement("div", { style:{ background:"#fff", border:"1px solid #e5e7eb", borderRadius:8, padding:20, ...style } }, children);
+    }
+
+    function StatBox({ label, value, sub, colour }) {
+      return React.createElement("div", { style:{ textAlign:"center", padding:"12px 16px", background:"#f8fafc", borderRadius:8, border:"1px solid #e5e7eb" } },
+        React.createElement("div", { style:{ fontSize:28, fontWeight:800, color:colour||"#1a3a5c" } }, value),
+        React.createElement("div", { style:{ fontSize:12, color:"#6b7280", marginTop:2 } }, label),
+        sub && React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:2 } }, sub)
+      );
+    }
+
+    // Module 1
+    function Module1({ onData, onSettings, settings, fileName, dataInfo, onClear }) {
+      const [dragOver, setDragOver] = useState(false);
+      const [error, setError]       = useState(null);
+
+      const handleFile = useCallback(file => {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = e => {
+          const { data, errors } = parseCSV(e.target.result);
+          if (errors.length) { setError(errors[0]); return; }
+          setError(null);
+          const match = file.name.match(/(\d{4}-\d{2}-\d{2})[-_to]+(\d{4}-\d{2}-\d{2})/);
+          const dateRange = match ? `${match[1]} to ${match[2]}` : "Unknown period";
+          onData(data, file.name, dateRange);
+        };
+        reader.readAsText(file);
+      }, [onData]);
+
+      return React.createElement(Card, null,
+        React.createElement(SectionHeader, { title:"Module 1 — Data Ingestion" }),
+        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 } },
+          React.createElement("div", null,
+            React.createElement("div", { style:{ fontSize:13, fontWeight:600, marginBottom:6, color:"#374151" } }, "Claude.ai Team Spend CSV"),
+            React.createElement("div", {
+              onDragOver: e => { e.preventDefault(); setDragOver(true); },
+              onDragLeave: () => setDragOver(false),
+              onDrop: e => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]); },
+              onClick: () => document.getElementById("csvInput").click(),
+              style:{ border:`2px dashed ${dragOver?"#1a3a5c":"#d1d5db"}`, borderRadius:8, padding:"24px 16px", textAlign:"center", cursor:"pointer", background:dragOver?"#eff6ff":"#f9fafb" }
+            },
+              React.createElement("div", { style:{ fontSize:13, color:"#6b7280" } }, fileName ? `✓ ${fileName}` : "Drag & drop or click to upload"),
+              React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:4 } }, "CSV format required")
+            ),
+            React.createElement("input", { id:"csvInput", type:"file", accept:".csv", style:{ display:"none" }, onChange: e => handleFile(e.target.files[0]) })
+          ),
+          React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10 } },
+            ...["AUD/USD Rate|audRate|0.01", "Opus:Sonnet Ratio|opusSonnetRatio|0.5", "Total Seats|totalSeats|1"].map(cfg => {
+              const [label, key, step] = cfg.split("|");
+              return React.createElement("div", { key },
+                React.createElement("label", { style:{ fontSize:12, color:"#374151", fontWeight:600 } }, label),
+                React.createElement("input", {
+                  type:"number", step, value:settings[key],
+                  onChange: e => onSettings({ [key]: parseFloat(e.target.value) || settings[key] }),
+                  style:{ width:"100%", border:"1px solid #d1d5db", borderRadius:6, padding:"4px 8px", fontSize:13, marginTop:2 }
+                })
+              );
+            })
+          )
+        ),
+        error && React.createElement("div", { style:{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6, padding:"10px 14px", fontSize:13, color:"#dc2626", marginBottom:12 } },
+          React.createElement("strong", null, "CSV Error: "), error, React.createElement("br"),
+          React.createElement("span", { style:{ fontSize:12 } }, "Expected: user_email, account_uuid, product, model, total_requests, total_prompt_tokens, total_completion_tokens, total_net_spend_usd")
+        ),
+        dataInfo && React.createElement("div", { style:{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:6, padding:"8px 14px", fontSize:13, color:"#166534", display:"flex", justifyContent:"space-between", alignItems:"center" } },
+          React.createElement("span", null, "✓ ", dataInfo),
+          React.createElement("button", { onClick:onClear, style:{ background:"none", border:"1px solid #166534", color:"#166534", borderRadius:4, padding:"2px 10px", fontSize:12, cursor:"pointer" } }, "Clear")
+        )
+      );
+    }
+
+    // Module 2
+    function Module2({ users, settings, metrics }) {
+      const active = users.filter(u => u.totalRequests > 0);
+      const advisory = users.filter(u => u.entity === "Frank Advisory");
+      const law      = users.filter(u => u.entity === "Frank Law");
+      const adoptionPct = (active.length / settings.totalSeats) * 100;
+
+      return React.createElement(Card, null,
+        React.createElement(SectionHeader, { title:"Module 2 — AI Adoption (North Star)" }),
+        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginBottom:20 } },
+          React.createElement(StatBox, { label:"Org Adoption", value:`${fmtDec(adoptionPct,0)}%`, sub:`${active.length} / ${settings.totalSeats} seats`, colour:"#1a3a5c" }),
+          React.createElement(StatBox, { label:"Frank Advisory", value:`${advisory.filter(u=>u.totalRequests>0).length} / ${advisory.length}`, sub:"seats active", colour:COLOURS.advisory }),
+          React.createElement(StatBox, { label:"Frank Law", value:`${law.filter(u=>u.totalRequests>0).length} / ${law.length}`, sub:"seats active", colour:COLOURS.law }),
+          React.createElement(StatBox, { label:"Avg Fluency Score", value:fmtDec(metrics.avg_fluency_score,0), sub:"/ 100", colour:COLOURS.tier2 })
+        ),
+        React.createElement("div", { style:{ background:"#f8fafc", borderRadius:6, padding:"10px 14px", marginBottom:16, fontSize:13 } },
+          React.createElement("span", { style:{ fontWeight:600, color:"#374151" } }, "Model Efficiency: "),
+          React.createElement("span", { style:{ color: metrics.org_opus_pct > 80 ? "#dc2626" : metrics.org_opus_pct > 50 ? "#f59e0b" : "#166534" } },
+            `${fmtDec(100-metrics.org_opus_pct,0)}% non-Opus spend`),
+          React.createElement("span", { style:{ color:"#9ca3af", marginLeft:8 } }, `(${fmtDec(metrics.org_opus_pct,0)}% Opus)`)
+        ),
+        React.createElement("div", { style:{ fontSize:13, fontWeight:600, color:"#374151", marginBottom:8 } }, "Digital Fluency Tiers"),
+        React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:8 } },
+          ...users.map(u =>
+            React.createElement("div", { key:u.email, style:{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, padding:"8px 10px", background:"#f9fafb", borderRadius:8, border:"1px solid #e5e7eb", minWidth:90 } },
+              React.createElement("div", { style:{ width:32, height:32, borderRadius:"50%", background:tierColour(u.fluencyTier), display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontWeight:700, fontSize:12 } },
+                u.fluencyTier === 1 ? "★" : `T${u.fluencyTier}`),
+              React.createElement("div", { style:{ fontSize:11, fontWeight:600, color:"#374151", textAlign:"center" } }, u.name),
+              React.createElement("div", { style:{ fontSize:10, color:"#6b7280" } }, `${fmtDec(u.fluencyScore,0)} pts`),
+              React.createElement(Badge, { tier:u.fluencyTier })
+            )
+          )
+        )
+      );
+    }
+
+    // Module 3
+    function Module3({ users, metrics }) {
+      const [showRecs, setShowRecs] = useState(false);
+      const pieData = [
+        { name:"Opus",   value:metrics.org_opus_pct },
+        { name:"Sonnet", value:metrics.org_sonnet_pct },
+        { name:"Haiku",  value:metrics.org_haiku_pct },
+      ].filter(d => d.value > 0);
+      const flagged = users.filter(u => u.opusPct > 80 && u.totalRequests > 0);
+
+      return React.createElement(Card, null,
+        React.createElement(SectionHeader, { title:"Module 3 — Model Governance" }),
+        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"220px 1fr", gap:24, marginBottom:12 } },
+          React.createElement("div", null,
+            React.createElement("div", { style:{ fontSize:12, fontWeight:600, color:"#6b7280", marginBottom:8, textAlign:"center" } }, "Org-wide Model Split"),
+            React.createElement(ResponsiveContainer, { width:"100%", height:180 },
+              React.createElement(PieChart, null,
+                React.createElement(Pie, { data:pieData, cx:"50%", cy:"50%", outerRadius:75, dataKey:"value",
+                  label:({name,value}) => `${name} ${fmtDec(value,0)}%`, labelLine:false, fontSize:11 },
+                  ...pieData.map(e => React.createElement(Cell, { key:e.name, fill:COLOURS[e.name.toLowerCase()]||"#ccc" }))
+                ),
+                React.createElement(Tooltip, { formatter:v => `${fmtDec(v,1)}%` })
+              )
+            )
+          ),
+          React.createElement("div", null,
+            React.createElement("div", { style:{ fontSize:12, fontWeight:600, color:"#6b7280", marginBottom:8 } }, "Per-user Model Breakdown"),
+            React.createElement("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:12 } },
+              React.createElement("thead", null,
+                React.createElement("tr", { style:{ borderBottom:"1px solid #e5e7eb" } },
+                  ...["User","Entity","Opus%","Sonnet%","Haiku%","Status"].map(h =>
+                    React.createElement("th", { key:h, style:{ textAlign:"left", padding:"4px 8px", color:"#6b7280", fontWeight:600 } }, h)
+                  )
+                )
+              ),
+              React.createElement("tbody", null,
+                ...users.filter(u => u.totalRequests > 0).map(u => {
+                  const flag = u.opusPct > 80 ? "red" : u.opusPct > 50 ? "amber" : "green";
+                  const fc   = { red:"#dc2626", amber:"#f59e0b", green:"#166534" }[flag];
+                  const sonnetPct = u.totalSpendUSD > 0 ? (u.modelBreakdown?.Sonnet?.spend||0)/u.totalSpendUSD*100 : 0;
+                  const haikuPct  = u.totalSpendUSD > 0 ? (u.modelBreakdown?.Haiku?.spend||0)/u.totalSpendUSD*100 : 0;
+                  return React.createElement("tr", { key:u.email, style:{ borderBottom:"1px solid #f3f4f6" } },
+                    React.createElement("td", { style:{ padding:"4px 8px", fontWeight:u.isBenchmark?700:400 } }, u.name, u.isBenchmark && React.createElement("span", { style:{ fontSize:10, color:"#6b7280", marginLeft:4 } }, "(Benchmark)")),
+                    React.createElement("td", { style:{ padding:"4px 8px", color:"#6b7280" } }, u.entity),
+                    React.createElement("td", { style:{ padding:"4px 8px", color:COLOURS.opus, fontWeight:600 } }, `${fmtDec(u.opusPct,0)}%`),
+                    React.createElement("td", { style:{ padding:"4px 8px", color:COLOURS.sonnet } }, `${fmtDec(sonnetPct,0)}%`),
+                    React.createElement("td", { style:{ padding:"4px 8px", color:COLOURS.haiku } }, `${fmtDec(haikuPct,0)}%`),
+                    React.createElement("td", { style:{ padding:"4px 8px" } },
+                      React.createElement("span", { style:{ color:fc, fontWeight:600, fontSize:11 } },
+                        flag==="red" ? "⚑ High" : flag==="amber" ? "◆ Moderate" : "✓ OK")
+                    )
+                  );
+                })
+              )
+            )
+          )
+        ),
+        flagged.length > 0 && React.createElement("div", { style:{ background:"#fef2f2", borderRadius:6, padding:"10px 14px", marginBottom:12, fontSize:12 } },
+          React.createElement("strong", { style:{ color:"#dc2626" } }, `⚑ Model Governance Flags (${flagged.length} users above 80% Opus):`),
+          ...flagged.map(u => React.createElement("div", { key:u.email, style:{ marginTop:4, color:"#374151" } }, `• ${u.name}: ${fmtDec(u.opusPct,0)}% Opus — recommend switching Cowork/Chat to Sonnet`))
+        ),
+        React.createElement("button", { onClick:()=>setShowRecs(!showRecs), style:{ background:"none", border:"1px solid #d1d5db", borderRadius:6, padding:"6px 12px", fontSize:12, cursor:"pointer", color:"#374151" } },
+          showRecs ? "▲ Hide" : "▼ Show", " Model Recommendation Library"),
+        showRecs && React.createElement("div", { style:{ marginTop:10, overflowX:"auto" } },
+          React.createElement("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:12 } },
+            React.createElement("thead", null,
+              React.createElement("tr", { style:{ background:"#f3f4f6" } },
+                ...["Task Type","Model","Reason"].map(h => React.createElement("th", { key:h, style:{ textAlign:"left", padding:"6px 10px" } }, h))
+              )
+            ),
+            React.createElement("tbody", null,
+              ...MODEL_RECOMMENDATIONS.map((r,i) =>
+                React.createElement("tr", { key:i, style:{ borderBottom:"1px solid #f3f4f6" } },
+                  React.createElement("td", { style:{ padding:"5px 10px" } }, r.task),
+                  React.createElement("td", { style:{ padding:"5px 10px", fontWeight:600, color:r.model.includes("Opus")?COLOURS.opus:r.model.includes("Haiku")?COLOURS.haiku:COLOURS.sonnet } }, r.model),
+                  React.createElement("td", { style:{ padding:"5px 10px", color:"#6b7280" } }, r.reason)
+                )
+              )
+            )
+          )
+        )
+      );
+    }
+
+    // Module 4
+    function Module4({ users, onUpdateLimit }) {
+      const [sortKey, setSortKey]   = useState("totalTokens");
+      const [sortDir, setSortDir]   = useState("desc");
+      const [expanded, setExpanded] = useState({});
+      const [editLimit, setEditLimit] = useState({});
+
+      const toggleSort = key => {
+        if (sortKey === key) setSortDir(d => d==="asc"?"desc":"asc");
+        else { setSortKey(key); setSortDir("desc"); }
+      };
+      const sorted = [...users].sort((a,b) => {
+        const av=a[sortKey]??0, bv=b[sortKey]??0;
+        return sortDir==="asc" ? av-bv : bv-av;
+      });
+      const cols = [
+        {key:"name",label:"Name"},{key:"entity",label:"Entity"},{key:"fluencyTier",label:"Tier"},
+        {key:"totalSpendAUD",label:"Spend (AUD)"},{key:"totalSpendUSD",label:"Spend (USD)"},
+        {key:"totalTokens",label:"Tokens"},{key:"totalRequests",label:"Requests"},
+        {key:"avgTokensPerRequest",label:"Avg Tok/Req"},{key:"opusPct",label:"Opus%"}
+      ];
+
+      return React.createElement(Card, null,
+        React.createElement(SectionHeader, { title:"Module 4 — User Spend & Token Breakdown" }),
+        React.createElement("div", { style:{ overflowX:"auto" } },
+          React.createElement("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:12 } },
+            React.createElement("thead", null,
+              React.createElement("tr", { style:{ background:"#f3f4f6", borderBottom:"2px solid #e5e7eb" } },
+                ...cols.map(c => React.createElement("th", {
+                  key:c.key, onClick:()=>toggleSort(c.key),
+                  style:{ textAlign:"left", padding:"6px 10px", cursor:"pointer", userSelect:"none", whiteSpace:"nowrap", color:sortKey===c.key?"#1a3a5c":"#6b7280", fontWeight:600 }
+                }, c.label, " ", sortKey===c.key?(sortDir==="asc"?"↑":"↓"):"")),
+                React.createElement("th", { style:{ padding:"6px 10px", color:"#6b7280", fontWeight:600 } }, "Limit (AUD)"),
+                React.createElement("th", { style:{ padding:"6px 10px", color:"#6b7280", fontWeight:600 } }, "Util%"),
+                React.createElement("th", null)
+              )
+            ),
+            React.createElement("tbody", null,
+              ...sorted.flatMap(u => {
+                const isExpanded = expanded[u.email];
+                const utilColour = !u.spendUtilisation?"#9ca3af":u.spendUtilisation>90?"#dc2626":u.spendUtilisation>75?"#f59e0b":"#166534";
+                const limitVal = editLimit[u.email] !== undefined ? editLimit[u.email] : (u.spendLimit ?? "");
+                const rows = [
+                  React.createElement("tr", { key:u.email, style:{ borderBottom:"1px solid #f3f4f6", background:u.totalRequests===0?"#fafafa":"#fff", opacity:u.totalRequests===0?0.6:1 } },
+                    React.createElement("td", { style:{ padding:"6px 10px", fontWeight:600 } },
+                      u.name,
+                      u.isBenchmark && React.createElement("span", { style:{ fontSize:10, color:"#6b7280", marginLeft:4 } }, "(Benchmark)"),
+                      u.fluencyTier===1 && React.createElement("span", { title:"Candidate internal AI trainer", style:{ marginLeft:4, fontSize:10, background:"#1a3a5c", color:"#fff", padding:"1px 5px", borderRadius:9999 } }, "★ Super User"),
+                      u.totalRequests===0 && React.createElement("span", { style:{ fontSize:10, color:"#9ca3af", marginLeft:4 } }, "Not active this period")
+                    ),
+                    React.createElement("td", { style:{ padding:"6px 10px", color:"#6b7280" } }, u.entity),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, React.createElement(Badge, { tier:u.fluencyTier })),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, fmtAUD(u.totalSpendAUD)),
+                    React.createElement("td", { style:{ padding:"6px 10px", color:"#6b7280" } }, fmtUSD(u.totalSpendUSD)),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, fmtTokens(u.totalTokens)),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, fmt(u.totalRequests)),
+                    React.createElement("td", { style:{ padding:"6px 10px", fontWeight:600 } }, fmtTokens(u.avgTokensPerRequest)),
+                    React.createElement("td", { style:{ padding:"6px 10px", color:COLOURS.opus } }, `${fmtDec(u.opusPct,0)}%`),
+                    React.createElement("td", { style:{ padding:"6px 10px" } },
+                      React.createElement("input", {
+                        type:"text", placeholder:"Unlimited", value:limitVal,
+                        onChange: e => setEditLimit(p => ({...p,[u.email]:e.target.value})),
+                        onBlur: e => { const v=parseFloat(e.target.value); onUpdateLimit(u.email, isNaN(v)?null:v); },
+                        style:{ width:70, border:"1px solid #d1d5db", borderRadius:4, padding:"2px 6px", fontSize:11 }
+                      })
+                    ),
+                    React.createElement("td", { style:{ padding:"6px 10px", color:utilColour, fontWeight:600 } }, u.spendUtilisation?`${fmtDec(u.spendUtilisation,0)}%`:"—"),
+                    React.createElement("td", { style:{ padding:"6px 10px" } },
+                      u.totalRequests > 0 && React.createElement("button", {
+                        onClick:()=>setExpanded(p=>({...p,[u.email]:!p[u.email]})),
+                        style:{ background:"none", border:"1px solid #d1d5db", borderRadius:4, padding:"2px 6px", fontSize:11, cursor:"pointer" }
+                      }, isExpanded?"▲":"▼")
+                    )
+                  )
+                ];
+                if (isExpanded) {
+                  rows.push(React.createElement("tr", { key:`${u.email}-exp`, style:{ borderBottom:"1px solid #f3f4f6" } },
+                    React.createElement("td", { colSpan:13, style:{ padding:"12px 20px", background:"#f8fafc" } },
+                      React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16 } },
+                        React.createElement("div", null,
+                          React.createElement("div", { style:{ fontSize:11, fontWeight:600, color:"#6b7280", marginBottom:6 } }, "BY PRODUCT"),
+                          ...Object.entries(u.productBreakdown).map(([p,v]) =>
+                            React.createElement("div", { key:p, style:{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 } },
+                              React.createElement("span", null, p),
+                              React.createElement("span", { style:{ fontWeight:600 } }, fmtAUD(v.spend * 1.55))
+                            )
+                          )
+                        ),
+                        React.createElement("div", null,
+                          React.createElement("div", { style:{ fontSize:11, fontWeight:600, color:"#6b7280", marginBottom:6 } }, "BY MODEL"),
+                          ...Object.entries(u.modelBreakdown).map(([m,v]) =>
+                            React.createElement("div", { key:m, style:{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 } },
+                              React.createElement("span", { style:{ color:COLOURS[m.toLowerCase()]||"#374151" } }, m),
+                              React.createElement("span", { style:{ fontWeight:600 } }, `${fmtDec(u.totalSpendUSD>0?(v.spend/u.totalSpendUSD)*100:0,0)}%`)
+                            )
+                          )
+                        ),
+                        React.createElement("div", null,
+                          React.createElement("div", { style:{ fontSize:11, fontWeight:600, color:"#6b7280", marginBottom:6 } }, "CONTEXT DEPTH"),
+                          React.createElement("div", { style:{ fontSize:20, fontWeight:800, color:"#1a3a5c" } }, fmtTokens(u.avgTokensPerRequest)),
+                          React.createElement("div", { style:{ fontSize:11, color:"#6b7280" } }, "avg tokens / request"),
+                          React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:6 } }, `Prompt: ${fmtTokens(u.totalPromptTokens)}`),
+                          React.createElement("div", { style:{ fontSize:11, color:"#9ca3af" } }, `Completion: ${fmtTokens(u.totalCompletionTokens)}`)
+                        )
+                      )
+                    )
+                  ));
+                }
+                return rows;
+              })
+            )
+          )
+        )
+      );
+    }
+
+    // Module 5
+    function Module5({ users }) {
+      const products = ["Cowork","Chat","Sheet Agent","Research","Claude Code"];
+      const surfaceData = products.map(p => {
+        let totalSpend = 0, opusSpend = 0;
+        users.forEach(u => {
+          const pd = u.productBreakdown[p];
+          if (pd) {
+            totalSpend += pd.spend;
+            const opusRatio = u.totalSpendUSD > 0 ? (u.modelBreakdown?.Opus?.spend||0)/u.totalSpendUSD : 0;
+            opusSpend += pd.spend * opusRatio;
+          }
+        });
+        return { name:p, spend:totalSpend, opusPct: totalSpend>0?(opusSpend/totalSpend)*100:0 };
+      }).filter(d => d.spend > 0);
+      const highLeverage = surfaceData.filter(d => d.opusPct > 80 && d.spend > 20);
+
+      return React.createElement(Card, null,
+        React.createElement(SectionHeader, { title:"Module 5 — Product / Surface Analysis" }),
+        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 280px", gap:24 } },
+          React.createElement("div", null,
+            React.createElement(ResponsiveContainer, { width:"100%", height:220 },
+              React.createElement(BarChart, { data:surfaceData, layout:"vertical", margin:{ left:20 } },
+                React.createElement(XAxis, { type:"number", tickFormatter:v=>fmtUSD(v), fontSize:11 }),
+                React.createElement(YAxis, { type:"category", dataKey:"name", width:95, fontSize:11 }),
+                React.createElement(Tooltip, { formatter:(v,n)=>[fmtUSD(v),"Spend USD"] }),
+                React.createElement(Bar, { dataKey:"spend", radius:[0,4,4,0] },
+                  ...surfaceData.map(e => React.createElement(Cell, { key:e.name, fill:e.opusPct>80?COLOURS.opus:e.opusPct>50?"#f59e0b":COLOURS.sonnet }))
+                )
+              )
+            ),
+            React.createElement("div", { style:{ display:"flex", gap:12, marginTop:4, fontSize:11, color:"#6b7280" } },
+              React.createElement("span", { style:{ color:COLOURS.opus } }, "■ Opus-dominant (>80%)"),
+              React.createElement("span", { style:{ color:"#f59e0b" } }, "■ Mixed (50–80%)"),
+              React.createElement("span", { style:{ color:COLOURS.sonnet } }, "■ Efficient (<50%)")
+            )
+          ),
+          React.createElement("div", null,
+            React.createElement("div", { style:{ fontSize:12, fontWeight:600, color:"#6b7280", marginBottom:8 } }, "Opus% by Surface"),
+            ...surfaceData.map(d =>
+              React.createElement("div", { key:d.name, style:{ marginBottom:10 } },
+                React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:2 } },
+                  React.createElement("span", null, d.name),
+                  React.createElement("span", { style:{ color:d.opusPct>80?COLOURS.opus:"#374151", fontWeight:600 } }, `${fmtDec(d.opusPct,0)}% Opus`)
+                ),
+                React.createElement("div", { style:{ height:6, background:"#e5e7eb", borderRadius:3 } },
+                  React.createElement("div", { style:{ height:6, background:d.opusPct>80?COLOURS.opus:COLOURS.sonnet, borderRadius:3, width:`${Math.min(100,d.opusPct)}%` } })
+                )
+              )
+            ),
+            highLeverage.length > 0 && React.createElement("div", { style:{ background:"#fef2f2", borderRadius:6, padding:"8px 10px", marginTop:8, fontSize:11 } },
+              React.createElement("strong", { style:{ color:"#dc2626" } }, "⚑ High savings leverage:"),
+              ...highLeverage.map(d => React.createElement("div", { key:d.name, style:{ marginTop:2 } }, `• ${d.name} (${fmtDec(d.opusPct,0)}% Opus, ${fmtUSD(d.spend)} spend)`))
+            )
+          )
+        )
+      );
+    }
+
+    // Module 6
+    function Module6({ users, settings, dateRange }) {
+      const [migrationPct, setMigrationPct] = useState(50);
+      const opusSpendUSD  = users.reduce((s,u) => s+(u.modelBreakdown?.Opus?.spend||0), 0);
+      const totalSpendUSD = users.reduce((s,u) => s+u.totalSpendUSD, 0);
+      const ratio = settings.opusSonnetRatio;
+      const saving = opusSpendUSD * (migrationPct/100) * (1 - 1/ratio);
+      const savingAUD = saving * settings.audRate;
+      let months = 1;
+      if (dateRange && dateRange !== "Unknown period") {
+        const parts = dateRange.match(/(\d{4}-\d{2}-\d{2})/g);
+        if (parts && parts.length === 2) {
+          const d1 = new Date(parts[0]), d2 = new Date(parts[1]);
+          months = Math.max(0.1, (d2-d1)/(1000*60*60*24*30));
+        }
+      }
+      const annualSaving = (saving/months)*12;
+      const annualTotal  = (totalSpendUSD/months)*12;
+
+      return React.createElement(Card, null,
+        React.createElement(SectionHeader, { title:"Module 6 — Savings Opportunity Calculator" }),
+        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24 } },
+          React.createElement("div", null,
+            React.createElement("div", { style:{ fontSize:13, color:"#374151", marginBottom:8 } },
+              "% of Opus usage migrated to Sonnet: ", React.createElement("strong", null, `${migrationPct}%`)
+            ),
+            React.createElement("input", { type:"range", min:0, max:100, value:migrationPct, onChange:e=>setMigrationPct(parseInt(e.target.value)), style:{ width:"100%", marginBottom:10 } }),
+            React.createElement("div", { style:{ display:"flex", gap:8, marginBottom:16 } },
+              ...[["Conservative",30],["Target",60],["Aggressive",90]].map(([label,val]) =>
+                React.createElement("button", { key:label, onClick:()=>setMigrationPct(val), style:{ flex:1, padding:"6px 8px", border:"1px solid #d1d5db", borderRadius:6, fontSize:12, cursor:"pointer", background:migrationPct===val?"#1a3a5c":"#f9fafb", color:migrationPct===val?"#fff":"#374151" } }, `${label} (${val}%)`)
+              )
+            ),
+            React.createElement("div", { style:{ fontSize:11, color:"#9ca3af" } }, `Formula: saving = opus_spend × ${migrationPct/100} × (1 − 1/${ratio}) = ${fmtUSD(saving)}`)
+          ),
+          React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 } },
+            React.createElement(StatBox, { label:"Current Opus Spend", value:fmtUSD(opusSpendUSD), sub:fmtAUD(opusSpendUSD*settings.audRate), colour:COLOURS.opus }),
+            React.createElement(StatBox, { label:"Projected Saving", value:fmtUSD(saving), sub:fmtAUD(savingAUD), colour:"#166534" }),
+            React.createElement(StatBox, { label:"Projected Total Spend", value:fmtUSD(totalSpendUSD-saving), sub:fmtAUD((totalSpendUSD-saving)*settings.audRate), colour:"#374151" }),
+            React.createElement(StatBox, { label:"Annualised Saving", value:fmtUSD(annualSaving), sub:`Run rate: ${fmtUSD(annualTotal)}/yr`, colour:"#166534" })
+          )
+        )
+      );
+    }
+
+    // Module 8
+    function Module8({ initiatives, setInitiatives, metrics }) {
+      const [editId, setEditId]   = useState(null);
+      const [form, setForm]       = useState({});
+      const metricKeys = ["active_users_count","org_adoption_pct","frank_law_adoption_pct","org_opus_pct","total_tokens","avg_fluency_score"];
+      const statusDot  = { green:"#22c55e", amber:"#f59e0b", red:"#ef4444" };
+
+      const enriched = initiatives.map(init => {
+        const cv = metrics[init.targetMetric] ?? null;
+        const progress = cv != null && init.targetValue > 0
+          ? init.lowerIsBetter
+            ? Math.min(100,(init.targetValue/Math.max(cv,0.001))*100)
+            : Math.min(100,(cv/init.targetValue)*100)
+          : 0;
+        const autoStatus = progress >= 90 ? "green" : progress >= 50 ? "amber" : "red";
+        return { ...init, currentValue:cv, status:init.statusOverride||autoStatus, progress };
+      });
+
+      const startEdit = init => { setEditId(init.id); setForm({ name:init.name, owner:init.owner, targetMetric:init.targetMetric, targetValue:init.targetValue, lowerIsBetter:init.lowerIsBetter??false }); };
+      const saveEdit  = () => { setInitiatives(p => p.map(i => i.id===editId ? {...i,...form,targetValue:parseFloat(form.targetValue)||0} : i)); setEditId(null); };
+      const addNew    = () => { const id=Date.now().toString(); setInitiatives(p=>[...p,{id,name:"New Initiative",owner:"",targetMetric:"active_users_count",targetValue:0,lowerIsBetter:false,statusOverride:null}]); setEditId(id); setForm({name:"New Initiative",owner:"",targetMetric:"active_users_count",targetValue:0,lowerIsBetter:false}); };
+      const exportJSON= () => { const b=new Blob([JSON.stringify(initiatives,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="initiatives.json"; a.click(); };
+
+      return React.createElement(Card, null,
+        React.createElement(SectionHeader, { title:"Module 8 — AI Committee Initiative Tracker" }),
+        React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10, marginBottom:12 } },
+          ...enriched.map(init =>
+            React.createElement("div", { key:init.id, style:{ border:"1px solid #e5e7eb", borderRadius:8, padding:"12px 14px", background:"#fafafa" } },
+              editId===init.id
+                ? React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr auto", gap:8, alignItems:"end" } },
+                    React.createElement("div", null, React.createElement("label", { style:{ fontSize:11, color:"#6b7280" } }, "Name"), React.createElement("input", { value:form.name, onChange:e=>setForm(f=>({...f,name:e.target.value})), style:{ width:"100%", border:"1px solid #d1d5db", borderRadius:4, padding:"4px 6px", fontSize:12 } })),
+                    React.createElement("div", null, React.createElement("label", { style:{ fontSize:11, color:"#6b7280" } }, "Owner"), React.createElement("input", { value:form.owner, onChange:e=>setForm(f=>({...f,owner:e.target.value})), style:{ width:"100%", border:"1px solid #d1d5db", borderRadius:4, padding:"4px 6px", fontSize:12 } })),
+                    React.createElement("div", null, React.createElement("label", { style:{ fontSize:11, color:"#6b7280" } }, "Metric"),
+                      React.createElement("select", { value:form.targetMetric, onChange:e=>setForm(f=>({...f,targetMetric:e.target.value})), style:{ width:"100%", border:"1px solid #d1d5db", borderRadius:4, padding:"4px 6px", fontSize:12 } },
+                        ...metricKeys.map(k => React.createElement("option", { key:k, value:k }, k))
+                      )
+                    ),
+                    React.createElement("div", null, React.createElement("label", { style:{ fontSize:11, color:"#6b7280" } }, "Target"), React.createElement("input", { type:"number", value:form.targetValue, onChange:e=>setForm(f=>({...f,targetValue:e.target.value})), style:{ width:"100%", border:"1px solid #d1d5db", borderRadius:4, padding:"4px 6px", fontSize:12 } })),
+                    React.createElement("div", { style:{ display:"flex", gap:4 } },
+                      React.createElement("button", { onClick:saveEdit, style:{ background:"#1a3a5c", color:"#fff", border:"none", borderRadius:4, padding:"4px 10px", fontSize:12, cursor:"pointer" } }, "Save"),
+                      React.createElement("button", { onClick:()=>setEditId(null), style:{ background:"none", border:"1px solid #d1d5db", borderRadius:4, padding:"4px 8px", fontSize:12, cursor:"pointer" } }, "✕")
+                    )
+                  )
+                : React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:12 } },
+                    React.createElement("div", { style:{ width:10, height:10, borderRadius:"50%", background:statusDot[init.status], flexShrink:0 } }),
+                    React.createElement("div", { style:{ flex:1 } },
+                      React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"baseline" } },
+                        React.createElement("span", { style:{ fontSize:13, fontWeight:600, color:"#374151" } }, init.name),
+                        React.createElement("span", { style:{ fontSize:11, color:"#6b7280" } }, init.owner)
+                      ),
+                      React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:2 } }, `${init.targetMetric}: target ${fmtTokens(init.targetValue)} | current ${init.currentValue!=null?fmtTokens(init.currentValue):"N/A"} | ${fmtDec(init.progress,0)}%`),
+                      React.createElement("div", { style:{ height:4, background:"#e5e7eb", borderRadius:2, marginTop:4 } },
+                        React.createElement("div", { style:{ height:4, borderRadius:2, width:`${init.progress}%`, background:statusDot[init.status], transition:"width .3s" } })
+                      )
+                    ),
+                    React.createElement("div", { style:{ display:"flex", gap:4 } },
+                      React.createElement("button", { onClick:()=>startEdit(init), style:{ background:"none", border:"1px solid #d1d5db", borderRadius:4, padding:"2px 8px", fontSize:11, cursor:"pointer" } }, "Edit"),
+                      React.createElement("button", { onClick:()=>setInitiatives(p=>p.filter(i=>i.id!==init.id)), style:{ background:"none", border:"1px solid #fca5a5", color:"#dc2626", borderRadius:4, padding:"2px 6px", fontSize:11, cursor:"pointer" } }, "✕")
+                    )
+                  )
+            )
+          )
+        ),
+        React.createElement("div", { style:{ display:"flex", gap:8 } },
+          React.createElement("button", { onClick:addNew, style:{ background:"#1a3a5c", color:"#fff", border:"none", borderRadius:6, padding:"8px 14px", fontSize:13, cursor:"pointer" } }, "+ Add Initiative"),
+          React.createElement("button", { onClick:exportJSON, style:{ background:"none", border:"1px solid #d1d5db", borderRadius:6, padding:"8px 14px", fontSize:13, cursor:"pointer" } }, "Export JSON")
+        )
+      );
+    }
+
+    // Module 7
+    function Module7({ users, metrics, initiatives, settings, dateRange }) {
+      const [report, setReport] = useState("");
+      const [copied, setCopied] = useState(false);
+
+      const generate = () => {
+        const today = new Date().toISOString().split("T")[0];
+        const active    = users.filter(u => u.totalRequests > 0);
+        const advisory  = users.filter(u => u.entity === "Frank Advisory");
+        const law       = users.filter(u => u.entity === "Frank Law");
+        const totalSpendAUD = users.reduce((s,u) => s+u.totalSpendAUD, 0);
+        let months = 1;
+        if (dateRange && dateRange !== "Unknown period") {
+          const parts = dateRange.match(/(\d{4}-\d{2}-\d{2})/g);
+          if (parts && parts.length === 2) {
+            const d1=new Date(parts[0]), d2=new Date(parts[1]);
+            months = Math.max(0.1,(d2-d1)/(1000*60*60*24*30));
+          }
+        }
+        const annualised = (totalSpendAUD/months)*12;
+        const opusSpendUSD = users.reduce((s,u) => s+(u.modelBreakdown?.Opus?.spend||0), 0);
+        const savingAUD = opusSpendUSD * 0.6 * (1-1/settings.opusSonnetRatio) * settings.audRate;
+        const statusEmoji = { green:"✅", amber:"⚠️", red:"🔴" };
+
+        const initiativeBlock = initiatives.map(init => {
+          const cv = metrics[init.targetMetric];
+          const progress = cv!=null&&init.targetValue>0 ? Math.min(100,init.lowerIsBetter?(init.targetValue/Math.max(cv,0.001))*100:(cv/init.targetValue)*100) : 0;
+          const status = progress>=90?"green":progress>=50?"amber":"red";
+          return `${statusEmoji[status]} ${init.name} — ${init.owner}\n  Target: ${init.targetMetric} = ${fmtTokens(init.targetValue)} | Current: ${cv!=null?fmtTokens(cv):"N/A"} | ${fmtDec(progress,0)}%`;
+        }).join("\n\n");
+
+        const userBlock = active.sort((a,b)=>b.totalTokens-a.totalTokens).map(u => {
+          const sonnetPct = u.totalSpendUSD>0?(u.modelBreakdown?.Sonnet?.spend||0)/u.totalSpendUSD*100:0;
+          const prods = Object.keys(u.productBreakdown).join(", ");
+          let flags = "";
+          if (u.opusPct > 80) flags += "\n  ⚑ Recommend model review — defaulting to Opus for routine tasks";
+          if (u.spendUtilisation > 75) flags += `\n  ⚑ Approaching spend limit (${fmtDec(u.spendUtilisation,0)}%)`;
+          return `[Tier ${u.fluencyTier}] ${u.name} (${u.entity})\n  Spend: ${fmtAUD(u.totalSpendAUD)} | Tokens: ${fmtTokens(u.totalTokens)} | Requests: ${fmt(u.totalRequests)} | Avg context: ${fmtTokens(u.avgTokensPerRequest)}\n  Model mix: ${fmtDec(u.opusPct,0)}% Opus / ${fmtDec(sonnetPct,0)}% Sonnet | Surfaces: ${prods}${flags}`;
+        }).join("\n\n");
+
+        const inactiveBlock = users.filter(u=>u.totalRequests===0).map(u=>`— ${u.name} (${u.entity}): No activity this period`).join("\n");
+        const superBlock = users.filter(u=>u.fluencyTier===1).map(u=>`• ${u.name}: ${fmtTokens(u.totalTokens)} tokens across ${u.surfaceCount} surface(s)`).join("\n")||"No Tier 1 super users this period.";
+        const flaggedModel = users.filter(u=>u.opusPct>80&&u.totalRequests>0);
+        const modelFlags = flaggedModel.map(u=>`• ${u.name}: ${fmtDec(u.opusPct,0)}% Opus — top surface: ${Object.entries(u.productBreakdown).sort((a,b)=>b[1].spend-a[1].spend)[0]?.[0]||"N/A"}`).join("\n")||"No users above 80% Opus threshold.";
+
+        const recs = [];
+        const worstInit = [...initiatives].sort((a,b) => {
+          const pa=metrics[a.targetMetric]!=null?(metrics[a.targetMetric]/a.targetValue)*100:0;
+          const pb=metrics[b.targetMetric]!=null?(metrics[b.targetMetric]/b.targetValue)*100:0;
+          return pa-pb;
+        })[0];
+        if (worstInit) recs.push(`Progress "${worstInit.name}" (${fmtDec((metrics[worstInit.targetMetric]||0)/worstInit.targetValue*100,0)}% to target) — owned by ${worstInit.owner}`);
+        if (metrics.frank_law_adoption_pct < 50) recs.push(`Frank Law onboarding — only ${fmtDec(metrics.frank_law_adoption_pct,0)}% of Frank Law seats active this period`);
+        if (metrics.org_opus_pct > 80) recs.push(`Model governance — org is at ${fmtDec(metrics.org_opus_pct,0)}% Opus; set Sonnet as default in Cowork/Chat`);
+
+        setReport(`FRANK GROUP — AI GOVERNANCE REPORT
+Period: ${dateRange||"Unknown period"}
+Prepared: ${today}
+Distribution: James Frank, AI Committee
+─────────────────────────────────────
+
+EXECUTIVE SUMMARY
+
+Adoption: ${active.length}/${settings.totalSeats} seats active (${fmtDec(metrics.org_adoption_pct,0)}%)
+— Frank Advisory: ${advisory.filter(u=>u.totalRequests>0).length}/${advisory.length} | Frank Law: ${law.filter(u=>u.totalRequests>0).length}/${law.length}
+Total spend: ${fmtAUD(totalSpendAUD)} (${fmtDec(months,1)} months)
+Annualised run rate: ~${fmtAUD(annualised)} per year
+Model efficiency: ${fmtDec(metrics.org_opus_pct,0)}% Opus / ${fmtDec(metrics.org_sonnet_pct,0)}% Sonnet / ${fmtDec(metrics.org_haiku_pct,0)}% Haiku
+Savings opportunity: Switch 60% Opus → Sonnet = save ~${fmtAUD(savingAUD)}/period
+
+─────────────────────────────────────
+AI COMMITTEE INITIATIVE STATUS
+
+${initiativeBlock}
+
+─────────────────────────────────────
+USER BREAKDOWN (ranked by tokens)
+
+${userBlock}
+
+${inactiveBlock}
+
+─────────────────────────────────────
+SUPER USERS — INTERNAL AI TRAINERS
+
+These team members are candidates to lead internal AI upskilling:
+${superBlock}
+
+─────────────────────────────────────
+MODEL GOVERNANCE FLAGS
+
+${modelFlags}
+Recommended action: Set Sonnet as default in Cowork and Sheet Agent settings.
+Reference: Model Selection Guide in the governance dashboard.
+
+─────────────────────────────────────
+RECOMMENDED FOCUS — NEXT PERIOD
+
+${recs.map((r,i)=>`${i+1}. ${r}`).join("\n")||"No specific recommendations this period."}
+
+─────────────────────────────────────
+Generated by Frank Group AI Governance Dashboard`);
+      };
+
+      const copy = () => { navigator.clipboard.writeText(report).then(()=>{ setCopied(true); setTimeout(()=>setCopied(false),2000); }); };
+      const download = () => { const b=new Blob([report],{type:"text/plain"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download=`frank-group-ai-report-${new Date().toISOString().split("T")[0]}.txt`; a.click(); };
+
+      return React.createElement(Card, null,
+        React.createElement(SectionHeader, { title:"Module 7 — Report Generator" }),
+        React.createElement("div", { style:{ display:"flex", gap:10, marginBottom:16 } },
+          React.createElement("button", { onClick:generate, style:{ background:"#1a3a5c", color:"#fff", border:"none", borderRadius:6, padding:"10px 20px", fontSize:13, fontWeight:600, cursor:"pointer" } }, "Generate Report"),
+          report && React.createElement("button", { onClick:copy, style:{ background:copied?"#166534":"#fff", color:copied?"#fff":"#374151", border:"1px solid #d1d5db", borderRadius:6, padding:"10px 16px", fontSize:13, cursor:"pointer" } }, copied?"✓ Copied!":"Copy to Clipboard"),
+          report && React.createElement("button", { onClick:download, style:{ background:"#fff", color:"#374151", border:"1px solid #d1d5db", borderRadius:6, padding:"10px 16px", fontSize:13, cursor:"pointer" } }, "Download .txt")
+        ),
+        report && React.createElement("textarea", { readOnly:true, value:report, style:{ width:"100%", height:400, fontFamily:"monospace", fontSize:12, border:"1px solid #e5e7eb", borderRadius:6, padding:12, resize:"vertical", background:"#f8fafc", boxSizing:"border-box" } })
+      );
+    }
+
+    // ─── Main App ────────────────────────────────────────────────────────────────
+
+    function App() {
+      const [rawRows, setRawRows]       = useState(null);
+      const [fileName, setFileName]     = useState(null);
+      const [dateRange, setDateRange]   = useState(null);
+      const [dataInfo, setDataInfo]     = useState(null);
+      const [settings, setSettings]     = useState({ audRate:1.55, opusSonnetRatio:5, totalSeats:8 });
+      const [initiatives, setInitiatives] = useState(DEFAULT_INITIATIVES);
+      const [spendOverrides, setSpendOverrides] = useState({});
+
+      const rows = rawRows || SAMPLE_DATA;
+
+      const users = useMemo(() => {
+        const agg = aggregateData(rows, settings.audRate);
+        return agg.map(u => {
+          if (spendOverrides[u.email] !== undefined) {
+            const limit = spendOverrides[u.email];
+            return { ...u, spendLimit:limit, spendUtilisation:limit?(u.totalSpendAUD/limit)*100:null };
+          }
+          return u;
+        });
+      }, [rows, settings.audRate, spendOverrides]);
+
+      const metrics = useMemo(() => {
+        const active   = users.filter(u=>u.totalRequests>0);
+        const lawTotal = users.filter(u=>u.entity==="Frank Law");
+        const lawActive= lawTotal.filter(u=>u.totalRequests>0);
+        const totalUSD = users.reduce((s,u)=>s+u.totalSpendUSD,0);
+        const opusUSD  = users.reduce((s,u)=>s+(u.modelBreakdown?.Opus?.spend||0),0);
+        const sonnetUSD= users.reduce((s,u)=>s+(u.modelBreakdown?.Sonnet?.spend||0),0);
+        const haikuUSD = users.reduce((s,u)=>s+(u.modelBreakdown?.Haiku?.spend||0),0);
+        return {
+          active_users_count:       active.length,
+          org_adoption_pct:         (active.length/settings.totalSeats)*100,
+          frank_law_adoption_pct:   lawTotal.length>0?(lawActive.length/lawTotal.length)*100:0,
+          org_opus_pct:             totalUSD>0?(opusUSD/totalUSD)*100:0,
+          org_sonnet_pct:           totalUSD>0?(sonnetUSD/totalUSD)*100:0,
+          org_haiku_pct:            totalUSD>0?(haikuUSD/totalUSD)*100:0,
+          total_tokens:             users.reduce((s,u)=>s+u.totalTokens,0),
+          avg_fluency_score:        active.length>0?active.reduce((s,u)=>s+u.fluencyScore,0)/active.length:0,
+        };
+      }, [users, settings.totalSeats]);
+
+      const handleData = useCallback((data, name, range) => {
+        setRawRows(data); setFileName(name); setDateRange(range);
+        const emails = [...new Set(data.map(r=>r.user_email))];
+        const total  = data.reduce((s,r)=>s+(r.total_net_spend_usd||0),0);
+        setDataInfo(`${range} · ${data.length} rows · ${emails.length} users · ${fmtAUD(total*settings.audRate)} total`);
+      }, [settings.audRate]);
+
+      const handleClear = () => { setRawRows(null); setFileName(null); setDateRange(null); setDataInfo(null); };
+      const updateSettings = patch => setSettings(s=>({...s,...patch}));
+      const updateLimit = (email,val) => setSpendOverrides(p=>({...p,[email]:val}));
+
+      return React.createElement("div", { style:{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", background:"#f1f5f9", minHeight:"100vh", padding:24 } },
+        // Header
+        React.createElement("div", { style:{ background:"#1a3a5c", color:"#fff", borderRadius:10, padding:"20px 28px", marginBottom:24, display:"flex", justifyContent:"space-between", alignItems:"center" } },
+          React.createElement("div", null,
+            React.createElement("div", { style:{ fontSize:22, fontWeight:800, letterSpacing:0.5 } }, "Frank Group AI Governance Dashboard"),
+            React.createElement("div", { style:{ fontSize:13, color:"#93c5fd", marginTop:4 } }, "Frank Advisory · Frank Law · Phase 1")
+          ),
+          React.createElement("div", null,
+            !rawRows && React.createElement("div", { style:{ fontSize:11, background:"#2563eb", color:"#fff", padding:"4px 12px", borderRadius:9999 } }, "Demo mode — upload CSV to load real data"),
+            rawRows  && React.createElement("div", { style:{ fontSize:11, background:"#166534", color:"#fff", padding:"4px 12px", borderRadius:9999 } }, `Live: ${dateRange}`)
+          )
+        ),
+        React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:20 } },
+          React.createElement(Module1, { onData:handleData, onSettings:updateSettings, settings, fileName, dataInfo, onClear:handleClear }),
+          React.createElement(Module2, { users, settings, metrics }),
+          React.createElement(Module3, { users, metrics }),
+          React.createElement(Module4, { users, onUpdateLimit:updateLimit }),
+          React.createElement(Module5, { users }),
+          React.createElement(Module6, { users, settings, dateRange }),
+          React.createElement(Module8, { initiatives, setInitiatives, metrics }),
+          React.createElement(Module7, { users, metrics, initiatives, settings, dateRange })
+        ),
+        React.createElement("div", { style:{ textAlign:"center", color:"#9ca3af", fontSize:11, marginTop:24, paddingBottom:12 } }, "Frank Group AI Governance Dashboard · Phase 1 · Client-side only · No data leaves your browser")
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
