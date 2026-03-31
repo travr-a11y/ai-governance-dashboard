@@ -11,8 +11,8 @@
   <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #f1f5f9; }
-    input[type=range] { cursor: pointer; accent-color: #1a3a5c; }
+    body { background: #f1f5f9; color: #1a1a1a; }
+    input[type=range] { cursor: pointer; accent-color: #1e1645; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #f1f5f9; }
     ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
@@ -64,16 +64,47 @@
     };
 
     const COLOURS = {
-      opus:    "#e74c3c",
-      sonnet:  "#2d7d5f",
-      haiku:   "#3a86c8",
-      advisory:"#1a3a5c",
-      law:     "#2d7d5f",
-      tier1:   "#1a3a5c",
-      tier2:   "#2d7d5f",
-      tier3:   "#f59e0b",
-      tier4:   "#9ca3af",
+      opus:           "#e74c3c",
+      sonnet:         "#88aa00",
+      haiku:          "#3a4a7c",
+      advisory:       "#1e1645",
+      law:            "#1e1645",
+      accent:         "#88aa00",
+      bodyText:       "#1a1a1a",
+      captionText:    "#4a4a4a",
+      tier1:          "#1e1645",
+      tier2:          "#88aa00",
+      tier3:          "#f59e0b",
+      tier4:          "#9ca3af",
+      premiumBadge:   "#d97706",
     };
+
+    const SEAT_COSTS_AUD = { Standard: 25, Premium: 125 };
+
+    const SEAT_TIERS = {
+      "alex@frankadvisory.com.au": "Premium",
+    };
+
+    const UUID_MAP_BASE = {
+      "d5e0fc6e-ca4f-4bf7-af5a-30ce538bb3ec": "trowley@frankadvisory.com.au",
+      "e5b76c83-0f3a-47df-a9a8-1d1b6efbd836": "alex@frankadvisory.com.au",
+      "a4470fc5-3bc0-486e-96bb-1bda3ea5004a": "andrea@frankadvisory.com.au",
+      "75a71888-9680-41f7-80f5-a57afa14e9b7": "bagar@franklaw.com.au",
+      "6ab23a9b-9b93-4437-bd7d-3b5579158595": "bwoodward@franklaw.com.au",
+      "63966804-e26d-469c-80a8-0633127cec0a": "rlyons@franklaw.com.au",
+    };
+
+    const BILLING_STANDARD_SEATS = 8;
+    const BILLING_PREMIUM_SEATS = 1;
+
+    const COACHING_KEYWORDS = [
+      { re: /research|due diligence|dd\b/i, label: "research & diligence" },
+      { re: /draft|email|memo|letter/i, label: "drafting & comms" },
+      { re: /code|python|script|automation/i, label: "automation & code" },
+      { re: /gtm|sales|pipeline|crm/i, label: "GTM & sales" },
+      { re: /contract|legal|clause/i, label: "legal & contracts" },
+      { re: /model|excel|sheet|data/i, label: "data & sheets" },
+    ];
 
     const MODEL_RECOMMENDATIONS = [
       { task: "Daily Cowork sessions, drafting, emails", model: "Sonnet", reason: "Fast, sufficient quality, 1/5 Opus cost" },
@@ -133,9 +164,232 @@
       return { data, errors: [] };
     }
 
+    function mergeUuidMap(overlay) {
+      return { ...UUID_MAP_BASE, ...(overlay || {}) };
+    }
+
+    function canonicalUserEmail(raw) {
+      if (!raw) return null;
+      const found = Object.keys(USERS_MAP).find(k => k.toLowerCase() === String(raw).toLowerCase());
+      return found || raw;
+    }
+
+    function parseConversationsFile(text) {
+      try {
+        const root = JSON.parse(text);
+        const list = Array.isArray(root) ? root : (root.conversations || root.data || []);
+        const items = [];
+        for (const c of list) {
+          const acc = c.account?.uuid || c.account_uuid || c.accountUuid;
+          const msgs = c.chat_messages || c.messages || [];
+          const messageCount = Array.isArray(msgs) ? msgs.length : (parseInt(c.message_count, 10) || 0);
+          items.push({
+            accountUuid: acc,
+            name: String(c.name || "Untitled").slice(0, 240),
+            messageCount,
+            created_at: c.created_at,
+            updated_at: c.updated_at || c.updatedAt,
+          });
+        }
+        return { items, errors: [] };
+      } catch (e) {
+        return { items: [], errors: [String(e.message || e)] };
+      }
+    }
+
+    function parseProjectsFile(text) {
+      try {
+        const root = JSON.parse(text);
+        const list = Array.isArray(root) ? root : (root.projects || root.data || []);
+        const items = [];
+        for (const p of list) {
+          const creator = p.creator?.uuid || p.creator_uuid || p.creatorUuid;
+          const docs = p.docs || p.documents || [];
+          items.push({
+            creatorUuid: creator,
+            promptTemplate: p.prompt_template || p.promptTemplate || "",
+            isPrivate: !!(p.is_private || p.isPrivate),
+            docsCount: Array.isArray(docs) ? docs.length : 0,
+          });
+        }
+        return { items, errors: [] };
+      } catch (e) {
+        return { items: [], errors: [String(e.message || e)] };
+      }
+    }
+
+    function parseMemoriesFile(text) {
+      try {
+        const root = JSON.parse(text);
+        const list = Array.isArray(root) ? root : (root.memories || root.data || []);
+        const items = [];
+        for (const m of list) {
+          const acc = m.account_uuid || m.accountUuid || m.account?.uuid;
+          const mem = m.conversations_memory || m.memory || "";
+          items.push({ accountUuid: acc, memoryLen: String(mem).length });
+        }
+        return { items, errors: [] };
+      } catch (e) {
+        return { items: [], errors: [String(e.message || e)] };
+      }
+    }
+
+    function parseUsersFile(text) {
+      try {
+        const root = JSON.parse(text);
+        const list = Array.isArray(root) ? root : (root.users || root.data || []);
+        const map = {};
+        const metaByEmail = {};
+        for (const u of list) {
+          const uuid = u.uuid || u.id;
+          const emailRaw = (u.email_address || u.email || "").trim();
+          if (!uuid || !emailRaw) continue;
+          const email = canonicalUserEmail(emailRaw);
+          map[uuid] = email;
+          const phone = u.verified_phone_number || u.phone || u.verifiedPhone;
+          metaByEmail[email] = {
+            phoneVerified: !!(phone && String(phone).length > 2),
+            fullName: u.full_name || u.fullName || "",
+          };
+        }
+        return { map, metaByEmail, errors: [] };
+      } catch (e) {
+        return { map: {}, metaByEmail: {}, errors: [String(e.message || e)] };
+      }
+    }
+
+    function parseCSVLine(line) {
+      const out = [];
+      let cur = "";
+      let inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === "\"") { inQ = !inQ; continue; }
+        if (c === "," && !inQ) { out.push(cur.trim()); cur = ""; continue; }
+        cur += c;
+      }
+      out.push(cur.trim());
+      return out.map(s => s.replace(/^"|"$/g, ""));
+    }
+
+    function parseCodeCSV(text) {
+      const lines = text.trim().split(/\r?\n/).filter(Boolean);
+      if (lines.length < 2) return { row: null, errors: ["File appears empty"] };
+      const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase());
+      const idxUser = headers.findIndex(h => h === "user" || h.includes("email"));
+      const idxSpend = headers.findIndex(h => h.includes("spend"));
+      const idxLines = headers.findIndex(h => h.includes("line"));
+      if (idxUser < 0 || idxSpend < 0 || idxLines < 0) {
+        return { row: null, errors: ["Expected columns: User, Spend this Month (USD), Lines this Month"] };
+      }
+      const vals = parseCSVLine(lines[1]);
+      const userCell = vals[idxUser] || "";
+      const spendStr = (vals[idxSpend] || "").replace(/[$,]/g, "");
+      const linesStr = (vals[idxLines] || "").replace(/,/g, "");
+      const spendUsd = parseFloat(spendStr) || 0;
+      const codeLines = parseInt(linesStr, 10) || 0;
+      const email = canonicalUserEmail(userCell);
+      return { row: { email, spendUsd, codeLines }, errors: [] };
+    }
+
+    function computeConversationSignal(conv) {
+      if (!conv || !conv.count) return 0;
+      const countScore = Math.min(100, (conv.count / 50) * 100);
+      const avg = conv.avgDepth || 0;
+      let depthScore = 20;
+      if (avg >= 10) depthScore = 100;
+      else if (avg >= 6) depthScore = 75;
+      else if (avg >= 3) depthScore = 50;
+      else if (avg >= 2) depthScore = 35;
+      const uniq = new Set(conv.names || []).size;
+      const topicScore = Math.min(100, (uniq / Math.max(Math.min(conv.count, 20), 1)) * 100);
+      let recencyScore = 40;
+      if (conv.lastUpdate) {
+        const days = (Date.now() - conv.lastUpdate.getTime()) / 86400000;
+        if (days <= 7) recencyScore = 100;
+        else if (days <= 14) recencyScore = 80;
+        else if (days <= 30) recencyScore = 55;
+        else recencyScore = 30;
+      }
+      return (countScore + depthScore + topicScore + recencyScore) / 4;
+    }
+
+    function computeProjectSignal(proj) {
+      if (!proj || !proj.count) return 0;
+      let s = 40;
+      if (proj.customPrompts > 0) s += 30;
+      if (proj.docCount >= 3) s += 20;
+      else if (proj.docCount >= 1) s += 10;
+      if (proj.privateCount > 0) s += 10;
+      return Math.min(100, s);
+    }
+
+    function computeConfigSignal(mem, userMeta) {
+      let s = 0;
+      if (mem && mem.memoryLen > 0) s += 60;
+      if (mem && mem.memoryLen > 2000) s += 20;
+      if (userMeta && userMeta.phoneVerified) s += 20;
+      return Math.min(100, s);
+    }
+
+    function buildBehaviorMaps(convItems, projItems, memItems, uuidMap, userMetaByEmail) {
+      const convByEmail = {};
+      const projByEmail = {};
+      const memByEmail = {};
+
+      for (const it of convItems || []) {
+        const uuid = it.accountUuid;
+        if (!uuid || !uuidMap[uuid]) continue;
+        const em = canonicalUserEmail(uuidMap[uuid]);
+        if (!Object.keys(USERS_MAP).some(k => k.toLowerCase() === em.toLowerCase()) && !USERS_MAP[em]) {
+          /* still allow if email matches domain users */
+        }
+        const key = Object.keys(USERS_MAP).find(k => k.toLowerCase() === em.toLowerCase()) || em;
+        if (!convByEmail[key]) convByEmail[key] = { names: [], depths: [], lastUpdate: null, count: 0 };
+        const bucket = convByEmail[key];
+        bucket.count++;
+        bucket.names.push(it.name);
+        bucket.depths.push(it.messageCount || 0);
+        const t = it.updated_at ? new Date(it.updated_at) : (it.created_at ? new Date(it.created_at) : null);
+        if (t && !isNaN(t.getTime())) {
+          if (!bucket.lastUpdate || t > bucket.lastUpdate) bucket.lastUpdate = t;
+        }
+      }
+      Object.keys(convByEmail).forEach(k => {
+        const b = convByEmail[k];
+        const sum = b.depths.reduce((a, x) => a + x, 0);
+        b.avgDepth = b.depths.length ? sum / b.depths.length : 0;
+      });
+
+      for (const p of projItems || []) {
+        const uuid = p.creatorUuid;
+        if (!uuid || !uuidMap[uuid]) continue;
+        const em = canonicalUserEmail(uuidMap[uuid]);
+        const key = Object.keys(USERS_MAP).find(k => k.toLowerCase() === em.toLowerCase()) || em;
+        if (!projByEmail[key]) projByEmail[key] = { count: 0, customPrompts: 0, docCount: 0, privateCount: 0 };
+        const b = projByEmail[key];
+        b.count++;
+        if (p.promptTemplate && String(p.promptTemplate).trim()) b.customPrompts++;
+        b.docCount += p.docsCount || 0;
+        if (p.isPrivate) b.privateCount++;
+      }
+
+      for (const m of memItems || []) {
+        const uuid = m.accountUuid;
+        if (!uuid || !uuidMap[uuid]) continue;
+        const em = canonicalUserEmail(uuidMap[uuid]);
+        const key = Object.keys(USERS_MAP).find(k => k.toLowerCase() === em.toLowerCase()) || em;
+        memByEmail[key] = { memoryLen: m.memoryLen || 0 };
+      }
+
+      const hasBehaviorData = (convItems && convItems.length > 0);
+      return { hasBehaviorData, convByEmail, projByEmail, memByEmail, userMetaByEmail: userMetaByEmail || {} };
+    }
+
     // ─── Aggregation ──────────────────────────────────────────────────────────────
 
-    function aggregateData(rows, audRate) {
+    function aggregateData(rows, audRate, behavior) {
+      const b = behavior || { hasBehaviorData: false, convByEmail: {}, projByEmail: {}, memByEmail: {}, userMetaByEmail: {} };
       const byUser = {};
       rows.forEach(row => {
         const emailRaw = row.user_email || "";
@@ -175,6 +429,7 @@
       return allUsers.map(u => {
         const mapKey = Object.keys(USERS_MAP).find(k => k.toLowerCase() === u.email.toLowerCase());
         const info = mapKey ? USERS_MAP[mapKey] : null;
+        const emailKey = mapKey || u.email;
         const totalTokens = u.totalPromptTokens + u.totalCompletionTokens;
         const opusSpend = u.modelBreakdown["Opus"]?.spend || 0;
         const opusPct = u.totalSpendUSD > 0 ? (opusSpend / u.totalSpendUSD) * 100 : 0;
@@ -182,7 +437,24 @@
         const tokenVolumeScore = Math.min(100, (totalTokens / orgAvgTokens) * 50);
         const surfaceDiversityScore = Math.min(100, surfaceCount * 20);
         const recencyScore = u.totalRequests > 0 ? 100 : 0;
-        const fluencyScore = tokenVolumeScore * 0.5 + surfaceDiversityScore * 0.3 + recencyScore * 0.2;
+        const spendSignal = tokenVolumeScore * 0.5 + surfaceDiversityScore * 0.3 + recencyScore * 0.2;
+
+        const conv = b.convByEmail[emailKey] || {};
+        const proj = b.projByEmail[emailKey] || {};
+        const mem = b.memByEmail[emailKey] || {};
+        const userMeta = b.userMetaByEmail[emailKey] || {};
+
+        let fluencyScore;
+        let fluencyFormula = "spend";
+        if (b.hasBehaviorData) {
+          const convSignal = computeConversationSignal(conv);
+          const projSignal = computeProjectSignal(proj);
+          const configSignal = computeConfigSignal(mem, userMeta);
+          fluencyScore = spendSignal * 0.25 + convSignal * 0.4 + projSignal * 0.2 + configSignal * 0.15;
+          fluencyFormula = "multi";
+        } else {
+          fluencyScore = spendSignal;
+        }
         const fluencyTier = fluencyScore >= 70 ? 1 : fluencyScore >= 40 ? 2 : fluencyScore >= 10 ? 3 : 4;
         const limitKey = Object.keys(SPEND_LIMITS).find(k => k.toLowerCase() === u.email.toLowerCase());
         const spendLimit = limitKey !== undefined ? SPEND_LIMITS[limitKey] : undefined;
@@ -194,6 +466,7 @@
           else if (u.email.toLowerCase().includes("franklaw")) entity = "Frank Law";
           else entity = "Unknown Entity";
         }
+        const seatTier = SEAT_TIERS[emailKey] || "Standard";
         return {
           email: u.email, name: info?.name || u.email, entity, isBenchmark: info?.isBenchmark || false,
           totalSpendUSD: u.totalSpendUSD, totalSpendAUD: spendAUD,
@@ -201,8 +474,10 @@
           totalTokens, totalRequests: u.totalRequests,
           avgTokensPerRequest: u.totalRequests > 0 ? totalTokens / u.totalRequests : 0,
           modelBreakdown: u.modelBreakdown, productBreakdown: u.productBreakdown,
-          opusPct, surfaceCount, fluencyScore, fluencyTier,
+          opusPct, surfaceCount, fluencyScore, fluencyTier, fluencyFormula,
           spendLimit: spendLimit ?? null, spendUtilisation,
+          seatTier,
+          behavior: { conv, proj, mem },
         };
       }).sort((a,b) => b.totalTokens - a.totalTokens);
     }
@@ -223,18 +498,22 @@
     const tierLabel  = t => (["","Super User","Active","Getting Started","Not Started"])[t] || "";
     const tierColour = t => ([COLOURS.tier4, COLOURS.tier1, COLOURS.tier2, COLOURS.tier3, COLOURS.tier4])[t] || COLOURS.tier4;
 
+    function monthlySeatCostAud() {
+      return BILLING_STANDARD_SEATS * SEAT_COSTS_AUD.Standard + BILLING_PREMIUM_SEATS * SEAT_COSTS_AUD.Premium;
+    }
+
     // ─── Components ──────────────────────────────────────────────────────────────
 
     function Badge({ tier }) {
-      const colors = { 1:"#1a3a5c", 2:"#2d7d5f", 3:"#f59e0b", 4:"#9ca3af" };
+      const colors = { 1: COLOURS.tier1, 2: COLOURS.tier2, 3: COLOURS.tier3, 4: COLOURS.tier4 };
       return React.createElement("span", {
-        style:{ background:colors[tier], color:"#fff", padding:"2px 8px", borderRadius:9999, fontSize:11, fontWeight:600, whiteSpace:"nowrap" }
+        style:{ background:colors[tier], color: tier === 2 ? "#1a1a1a" : "#fff", padding:"2px 8px", borderRadius:9999, fontSize:11, fontWeight:600, whiteSpace:"nowrap" }
       }, tier===1 ? "★ " + tierLabel(tier) : tierLabel(tier));
     }
 
     function SectionHeader({ title }) {
-      return React.createElement("div", { style:{ borderBottom:"2px solid #1a3a5c", marginBottom:16, paddingBottom:6 } },
-        React.createElement("h2", { style:{ margin:0, fontSize:16, fontWeight:700, color:"#1a3a5c", textTransform:"uppercase", letterSpacing:1 } }, title)
+      return React.createElement("div", { style:{ borderBottom:`2px solid ${COLOURS.advisory}`, marginBottom:16, paddingBottom:6 } },
+        React.createElement("h2", { style:{ margin:0, fontSize:16, fontWeight:700, color:COLOURS.advisory, textTransform:"uppercase", letterSpacing:1 } }, title)
       );
     }
 
@@ -244,18 +523,25 @@
 
     function StatBox({ label, value, sub, colour }) {
       return React.createElement("div", { style:{ textAlign:"center", padding:"12px 16px", background:"#f8fafc", borderRadius:8, border:"1px solid #e5e7eb" } },
-        React.createElement("div", { style:{ fontSize:28, fontWeight:800, color:colour||"#1a3a5c" } }, value),
-        React.createElement("div", { style:{ fontSize:12, color:"#6b7280", marginTop:2 } }, label),
+        React.createElement("div", { style:{ fontSize:28, fontWeight:800, color:colour||COLOURS.advisory } }, value),
+        React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginTop:2 } }, label),
         sub && React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:2 } }, sub)
       );
     }
 
     // Module 1
-    function Module1({ onData, onSettings, settings, fileName, dataInfo, onClear }) {
-      const [dragOver, setDragOver] = useState(false);
-      const [error, setError]       = useState(null);
+    function Module1({
+      onData, onSettings, settings, fileName, dataInfo, onClear,
+      onConvItems, onProjItems, onMemItems, onUsersOverlay,
+      onCodeRow, convCount, projCount, memCount, codeLines, codeFileName,
+      refreshAud, audLoading, audRateUpdated, onClearExport,
+    }) {
+      const [dragSpend, setDragSpend] = useState(false);
+      const [dragExport, setDragExport] = useState(false);
+      const [dragCode, setDragCode] = useState(false);
+      const [error, setError] = useState(null);
 
-      const handleFile = useCallback(file => {
+      const handleSpendFile = useCallback(file => {
         if (!file) return;
         const reader = new FileReader();
         reader.onload = e => {
@@ -269,50 +555,144 @@
         reader.readAsText(file);
       }, [onData]);
 
+      const handleExportFile = useCallback(file => {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = e => {
+          const text = e.target.result;
+          const nm = file.name.toLowerCase();
+          setError(null);
+          if (nm.includes("conversation")) {
+            const { items, errors } = parseConversationsFile(text);
+            if (errors.length) { setError(errors[0]); return; }
+            onConvItems(items, file.name);
+          } else if (nm.includes("project")) {
+            const { items, errors } = parseProjectsFile(text);
+            if (errors.length) { setError(errors[0]); return; }
+            onProjItems(items, file.name);
+          } else if (nm.includes("memor")) {
+            const { items, errors } = parseMemoriesFile(text);
+            if (errors.length) { setError(errors[0]); return; }
+            onMemItems(items, file.name);
+          } else if (nm.includes("user")) {
+            const { map, metaByEmail, errors } = parseUsersFile(text);
+            if (errors.length) { setError(errors[0]); return; }
+            onUsersOverlay(map, metaByEmail, file.name);
+          } else {
+            setError("Name file conversations.json, projects.json, memories.json, or users.json");
+          }
+        };
+        reader.readAsText(file);
+      }, [onConvItems, onProjItems, onMemItems, onUsersOverlay]);
+
+      const handleCodeFile = useCallback(file => {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = e => {
+          const { row, errors } = parseCodeCSV(e.target.result);
+          if (errors.length) { setError(errors[0]); return; }
+          if (!row || !row.email) { setError("Could not parse Claude Code CSV row"); return; }
+          setError(null);
+          onCodeRow(row, file.name);
+        };
+        reader.readAsText(file);
+      }, [onCodeRow]);
+
+      const seatMonthly = monthlySeatCostAud();
+
       return React.createElement(Card, null,
         React.createElement(SectionHeader, { title:"Module 1 — Data Ingestion" }),
-        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 } },
+        React.createElement("div", { style:{ background:"#f8fafc", border:"1px solid #e5e7eb", borderRadius:8, padding:"10px 14px", marginBottom:14, fontSize:12, color:COLOURS.captionText } },
+          React.createElement("strong", { style:{ color:COLOURS.advisory } }, "Seat billing (plan): "),
+          `A$${fmtDec(seatMonthly,0)}/mo — ${BILLING_STANDARD_SEATS}× Standard (A$${SEAT_COSTS_AUD.Standard}) + ${BILLING_PREMIUM_SEATS}× Premium (A$${SEAT_COSTS_AUD.Premium}). Claude Code is separate billing.`
+        ),
+        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:16, marginBottom:16 } },
           React.createElement("div", null,
-            React.createElement("div", { style:{ fontSize:13, fontWeight:600, marginBottom:6, color:"#374151" } }, "Claude.ai Team Spend CSV"),
+            React.createElement("div", { style:{ fontSize:13, fontWeight:600, marginBottom:6, color:COLOURS.bodyText } }, "Anthropic Team usage CSV"),
             React.createElement("div", {
-              onDragOver: e => { e.preventDefault(); setDragOver(true); },
-              onDragLeave: () => setDragOver(false),
-              onDrop: e => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]); },
+              onDragOver: e => { e.preventDefault(); setDragSpend(true); },
+              onDragLeave: () => setDragSpend(false),
+              onDrop: e => { e.preventDefault(); setDragSpend(false); handleSpendFile(e.dataTransfer.files[0]); },
               onClick: () => document.getElementById("csvInput").click(),
-              style:{ border:`2px dashed ${dragOver?"#1a3a5c":"#d1d5db"}`, borderRadius:8, padding:"24px 16px", textAlign:"center", cursor:"pointer", background:dragOver?"#eff6ff":"#f9fafb" }
+              style:{ border:`2px dashed ${dragSpend?COLOURS.advisory:"#d1d5db"}`, borderRadius:8, padding:"20px 12px", textAlign:"center", cursor:"pointer", background:dragSpend?"#f5f3ff":"#f9fafb" }
             },
-              React.createElement("div", { style:{ fontSize:13, color:"#6b7280" } }, fileName ? `✓ ${fileName}` : "Drag & drop or click to upload"),
-              React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:4 } }, "CSV format required")
+              React.createElement("div", { style:{ fontSize:13, color:COLOURS.captionText } }, fileName ? `✓ ${fileName}` : "Drop or click — spend CSV"),
+              React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:4 } }, "Required columns from Anthropic admin export")
             ),
-            React.createElement("input", { id:"csvInput", type:"file", accept:".csv", style:{ display:"none" }, onChange: e => handleFile(e.target.files[0]) })
+            React.createElement("input", { id:"csvInput", type:"file", accept:".csv", style:{ display:"none" }, onChange: e => handleSpendFile(e.target.files[0]) })
           ),
-          React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10 } },
-            ...["AUD/USD Rate|audRate|0.01", "Opus:Sonnet Ratio|opusSonnetRatio|0.5", "Total Seats|totalSeats|1"].map(cfg => {
-              const [label, key, step] = cfg.split("|");
-              return React.createElement("div", { key },
-                React.createElement("label", { style:{ fontSize:12, color:"#374151", fontWeight:600 } }, label),
-                React.createElement("input", {
-                  type:"number", step, value:settings[key],
-                  onChange: e => onSettings({ [key]: parseFloat(e.target.value) || settings[key] }),
-                  style:{ width:"100%", border:"1px solid #d1d5db", borderRadius:6, padding:"4px 8px", fontSize:13, marginTop:2 }
-                })
-              );
-            })
+          React.createElement("div", null,
+            React.createElement("div", { style:{ fontSize:13, fontWeight:600, marginBottom:6, color:COLOURS.bodyText } }, "Claude.ai export (optional)"),
+            React.createElement("div", {
+              onDragOver: e => { e.preventDefault(); setDragExport(true); },
+              onDragLeave: () => setDragExport(false),
+              onDrop: e => { e.preventDefault(); setDragExport(false); handleExportFile(e.dataTransfer.files[0]); },
+              onClick: () => document.getElementById("jsonInput").click(),
+              style:{ border:`2px dashed ${dragExport?COLOURS.accent:"#d1d5db"}`, borderRadius:8, padding:"20px 12px", textAlign:"center", cursor:"pointer", background:dragExport?"#f7fce8":"#f9fafb" }
+            },
+              React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText } }, "conversations / projects / memories / users.json"),
+              React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:4 } }, `Loaded: ${convCount} convos · ${projCount} projects · ${memCount} memories`)
+            ),
+            React.createElement("input", { id:"jsonInput", type:"file", accept:".json,application/json", style:{ display:"none" }, onChange: e => handleExportFile(e.target.files[0]) })
+          ),
+          React.createElement("div", null,
+            React.createElement("div", { style:{ fontSize:13, fontWeight:600, marginBottom:6, color:COLOURS.bodyText } }, "Claude Code team CSV (optional)"),
+            React.createElement("div", {
+              onDragOver: e => { e.preventDefault(); setDragCode(true); },
+              onDragLeave: () => setDragCode(false),
+              onDrop: e => { e.preventDefault(); setDragCode(false); handleCodeFile(e.dataTransfer.files[0]); },
+              onClick: () => document.getElementById("codeCsvInput").click(),
+              style:{ border:`2px dashed ${dragCode?COLOURS.advisory:"#d1d5db"}`, borderRadius:8, padding:"20px 12px", textAlign:"center", cursor:"pointer", background:dragCode?"#f5f3ff":"#f9fafb" }
+            },
+              React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText } }, codeFileName ? `✓ ${codeFileName}` : "User, Spend (USD), Lines"),
+              React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:4 } }, codeLines ? `${fmt(codeLines)} lines (Trav)` : "Does not affect fluency averages")
+            ),
+            React.createElement("input", { id:"codeCsvInput", type:"file", accept:".csv", style:{ display:"none" }, onChange: e => handleCodeFile(e.target.files[0]) })
           )
         ),
-        error && React.createElement("div", { style:{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6, padding:"10px 14px", fontSize:13, color:"#dc2626", marginBottom:12 } },
-          React.createElement("strong", null, "CSV Error: "), error, React.createElement("br"),
-          React.createElement("span", { style:{ fontSize:12 } }, "Expected: user_email, account_uuid, product, model, total_requests, total_prompt_tokens, total_completion_tokens, total_net_spend_usd")
+        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:12, marginBottom:14 } },
+          React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:6 } },
+            React.createElement("label", { style:{ fontSize:12, color:COLOURS.bodyText, fontWeight:600 } }, "AUD/USD rate"),
+            React.createElement("div", { style:{ display:"flex", gap:8, alignItems:"center" } },
+              React.createElement("input", {
+                type:"number", step:0.01, value:settings.audRate,
+                onChange: e => onSettings({ audRate: parseFloat(e.target.value) || settings.audRate }),
+                style:{ flex:1, border:"1px solid #d1d5db", borderRadius:6, padding:"6px 8px", fontSize:13 }
+              }),
+              React.createElement("button", {
+                type:"button", onClick: refreshAud, disabled: audLoading,
+                style:{ whiteSpace:"nowrap", padding:"6px 10px", borderRadius:6, border:`1px solid ${COLOURS.advisory}`, background: audLoading ? "#e5e7eb" : "#fff", color: COLOURS.advisory, cursor: audLoading ? "wait" : "pointer", fontSize:12, fontWeight:600 }
+              }, audLoading ? "…" : "Refresh live")
+            ),
+            audRateUpdated && React.createElement("div", { style:{ fontSize:10, color:"#9ca3af" } }, "Frankfurter: ", new Date(audRateUpdated).toLocaleString())
+          ),
+          ...["Opus:Sonnet Ratio|opusSonnetRatio|0.5", "Total Seats|totalSeats|1"].map(cfg => {
+            const [label, key, step] = cfg.split("|");
+            return React.createElement("div", { key, style:{ display:"flex", flexDirection:"column", gap:6 } },
+              React.createElement("label", { style:{ fontSize:12, color:COLOURS.bodyText, fontWeight:600 } }, label),
+              React.createElement("input", {
+                type:"number", step, value:settings[key],
+                onChange: e => onSettings({ [key]: parseFloat(e.target.value) || settings[key] }),
+                style:{ border:"1px solid #d1d5db", borderRadius:6, padding:"6px 8px", fontSize:13 }
+              })
+            );
+          })
         ),
-        dataInfo && React.createElement("div", { style:{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:6, padding:"8px 14px", fontSize:13, color:"#166534", display:"flex", justifyContent:"space-between", alignItems:"center" } },
+        React.createElement("div", { style:{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:10 } },
+          React.createElement("button", { type:"button", onClick:onClearExport, style:{ fontSize:12, padding:"6px 12px", borderRadius:6, border:"1px solid #d1d5db", background:"#fff", cursor:"pointer" } }, "Clear Claude.ai + Code uploads")
+        ),
+        error && React.createElement("div", { style:{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6, padding:"10px 14px", fontSize:13, color:"#dc2626", marginBottom:12 } },
+          React.createElement("strong", null, "Error: "), error
+        ),
+        dataInfo && React.createElement("div", { style:{ background:"#f0fdf4", border:"1px solid #86efac", borderRadius:6, padding:"8px 14px", fontSize:13, color:"#166534", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 } },
           React.createElement("span", null, "✓ ", dataInfo),
-          React.createElement("button", { onClick:onClear, style:{ background:"none", border:"1px solid #166534", color:"#166534", borderRadius:4, padding:"2px 10px", fontSize:12, cursor:"pointer" } }, "Clear")
+          React.createElement("button", { onClick:onClear, style:{ background:"none", border:"1px solid #166534", color:"#166534", borderRadius:4, padding:"2px 10px", fontSize:12, cursor:"pointer" } }, "Clear spend CSV")
         )
       );
     }
 
     // Module 2
-    function Module2({ users, settings, metrics }) {
+    function Module2({ users, settings, metrics, hasBehaviorData }) {
       const active = users.filter(u => u.totalRequests > 0);
       const advisory = users.filter(u => u.entity === "Frank Advisory");
       const law      = users.filter(u => u.entity === "Frank Law");
@@ -320,19 +700,24 @@
 
       return React.createElement(Card, null,
         React.createElement(SectionHeader, { title:"Module 2 — AI Adoption (North Star)" }),
+        React.createElement("div", { style:{ background:"#f5f3ff", border:`1px solid ${COLOURS.advisory}`, borderRadius:6, padding:"8px 12px", marginBottom:14, fontSize:12, color:COLOURS.bodyText } },
+          hasBehaviorData
+            ? React.createElement("span", null, React.createElement("strong", null, "Fluency: "), "Multi-signal score (conversations 40%, spend 25%, projects 20%, config 15%).")
+            : React.createElement("span", null, React.createElement("strong", null, "Fluency: "), "Spend-based estimate. Upload ", React.createElement("code", null, "conversations.json"), " for full behavioural score.")
+        ),
         React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginBottom:20 } },
-          React.createElement(StatBox, { label:"Org Adoption", value:`${fmtDec(adoptionPct,0)}%`, sub:`${active.length} / ${settings.totalSeats} seats`, colour:"#1a3a5c" }),
+          React.createElement(StatBox, { label:"Org Adoption", value:`${fmtDec(adoptionPct,0)}%`, sub:`${active.length} / ${settings.totalSeats} seats`, colour:COLOURS.advisory }),
           React.createElement(StatBox, { label:"Frank Advisory", value:`${advisory.filter(u=>u.totalRequests>0).length} / ${advisory.length}`, sub:"seats active", colour:COLOURS.advisory }),
           React.createElement(StatBox, { label:"Frank Law", value:`${law.filter(u=>u.totalRequests>0).length} / ${law.length}`, sub:"seats active", colour:COLOURS.law }),
-          React.createElement(StatBox, { label:"Avg Fluency Score", value:fmtDec(metrics.avg_fluency_score,0), sub:"/ 100", colour:COLOURS.tier2 })
+          React.createElement(StatBox, { label:"Avg Fluency Score", value:fmtDec(metrics.avg_fluency_score,0), sub:"/ 100", colour:COLOURS.accent })
         ),
         React.createElement("div", { style:{ background:"#f8fafc", borderRadius:6, padding:"10px 14px", marginBottom:16, fontSize:13 } },
-          React.createElement("span", { style:{ fontWeight:600, color:"#374151" } }, "Model Efficiency: "),
+          React.createElement("span", { style:{ fontWeight:600, color:COLOURS.bodyText } }, "Model Efficiency: "),
           React.createElement("span", { style:{ color: metrics.org_opus_pct > 80 ? "#dc2626" : metrics.org_opus_pct > 50 ? "#f59e0b" : "#166534" } },
             `${fmtDec(100-metrics.org_opus_pct,0)}% non-Opus spend`),
           React.createElement("span", { style:{ color:"#9ca3af", marginLeft:8 } }, `(${fmtDec(metrics.org_opus_pct,0)}% Opus)`)
         ),
-        React.createElement("div", { style:{ fontSize:13, fontWeight:600, color:"#374151", marginBottom:8 } }, "Digital Fluency Tiers"),
+        React.createElement("div", { style:{ fontSize:13, fontWeight:600, color:COLOURS.bodyText, marginBottom:8 } }, "Digital Fluency Tiers"),
         React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:8 } },
           ...users.map(u =>
             React.createElement("div", { key:u.email, style:{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, padding:"8px 10px", background:"#f9fafb", borderRadius:8, border:"1px solid #e5e7eb", minWidth:90 } },
@@ -432,7 +817,7 @@
     }
 
     // Module 4
-    function Module4({ users, onUpdateLimit }) {
+    function Module4({ users, onUpdateLimit, audRate, codeData }) {
       const [sortKey, setSortKey]   = useState("totalTokens");
       const [sortDir, setSortDir]   = useState("desc");
       const [expanded, setExpanded] = useState({});
@@ -447,22 +832,40 @@
         return sortDir==="asc" ? av-bv : bv-av;
       });
       const cols = [
-        {key:"name",label:"Name"},{key:"entity",label:"Entity"},{key:"fluencyTier",label:"Tier"},
+        {key:"name",label:"Name"},{key:"entity",label:"Entity"},{key:"seatTier",label:"Seat"},
+        {key:"fluencyTier",label:"Tier"},
         {key:"totalSpendAUD",label:"Spend (AUD)"},{key:"totalSpendUSD",label:"Spend (USD)"},
         {key:"totalTokens",label:"Tokens"},{key:"totalRequests",label:"Requests"},
         {key:"avgTokensPerRequest",label:"Avg Tok/Req"},{key:"opusPct",label:"Opus%"}
       ];
 
+      const seatBadge = (tier) => React.createElement("span", {
+        style: {
+          fontSize:10, fontWeight:700, padding:"2px 6px", borderRadius:9999,
+          background: tier === "Premium" ? "#fff7ed" : "#f3f4f6",
+          color: tier === "Premium" ? COLOURS.premiumBadge : "#4b5563",
+          border: `1px solid ${tier === "Premium" ? COLOURS.premiumBadge : "#d1d5db"}`,
+        }
+      }, tier === "Premium" ? "Premium" : "Standard");
+
+      const codeEmailKey = codeData && codeData.email
+        ? (Object.keys(USERS_MAP).find(k => k.toLowerCase() === String(codeData.email).toLowerCase()) || codeData.email)
+        : null;
+
       return React.createElement(Card, null,
         React.createElement(SectionHeader, { title:"Module 4 — User Spend & Token Breakdown" }),
+        codeData && React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:10 } },
+          React.createElement("strong", { style:{ color:COLOURS.advisory } }, "Claude Code (separate billing): "),
+          `${fmtUSD(codeData.spendUsd)} · ${fmt(codeData.codeLines)} lines — shown as an extra row; not included in org averages in Module 2.`
+        ),
         React.createElement("div", { style:{ overflowX:"auto" } },
           React.createElement("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:12 } },
             React.createElement("thead", null,
               React.createElement("tr", { style:{ background:"#f3f4f6", borderBottom:"2px solid #e5e7eb" } },
                 ...cols.map(c => React.createElement("th", {
-                  key:c.key, onClick:()=>toggleSort(c.key),
-                  style:{ textAlign:"left", padding:"6px 10px", cursor:"pointer", userSelect:"none", whiteSpace:"nowrap", color:sortKey===c.key?"#1a3a5c":"#6b7280", fontWeight:600 }
-                }, c.label, " ", sortKey===c.key?(sortDir==="asc"?"↑":"↓"):"")),
+                  key:c.key, onClick:()=> c.key !== "seatTier" && toggleSort(c.key),
+                  style:{ textAlign:"left", padding:"6px 10px", cursor: c.key==="seatTier" ? "default" : "pointer", userSelect:"none", whiteSpace:"nowrap", color:sortKey===c.key?COLOURS.advisory:"#6b7280", fontWeight:600 }
+                }, c.label, " ", c.key!=="seatTier" && sortKey===c.key?(sortDir==="asc"?"↑":"↓"):"")),
                 React.createElement("th", { style:{ padding:"6px 10px", color:"#6b7280", fontWeight:600 } }, "Limit (AUD)"),
                 React.createElement("th", { style:{ padding:"6px 10px", color:"#6b7280", fontWeight:600 } }, "Util%"),
                 React.createElement("th", null)
@@ -478,10 +881,11 @@
                     React.createElement("td", { style:{ padding:"6px 10px", fontWeight:600 } },
                       u.name,
                       u.isBenchmark && React.createElement("span", { style:{ fontSize:10, color:"#6b7280", marginLeft:4 } }, "(Benchmark)"),
-                      u.fluencyTier===1 && React.createElement("span", { title:"Candidate internal AI trainer", style:{ marginLeft:4, fontSize:10, background:"#1a3a5c", color:"#fff", padding:"1px 5px", borderRadius:9999 } }, "★ Super User"),
+                      u.fluencyTier===1 && React.createElement("span", { title:"Candidate internal AI trainer", style:{ marginLeft:4, fontSize:10, background:COLOURS.advisory, color:"#fff", padding:"1px 5px", borderRadius:9999 } }, "★ Super User"),
                       u.totalRequests===0 && React.createElement("span", { style:{ fontSize:10, color:"#9ca3af", marginLeft:4 } }, "Not active this period")
                     ),
                     React.createElement("td", { style:{ padding:"6px 10px", color:"#6b7280" } }, u.entity),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, seatBadge(u.seatTier || "Standard")),
                     React.createElement("td", { style:{ padding:"6px 10px" } }, React.createElement(Badge, { tier:u.fluencyTier })),
                     React.createElement("td", { style:{ padding:"6px 10px" } }, fmtAUD(u.totalSpendAUD)),
                     React.createElement("td", { style:{ padding:"6px 10px", color:"#6b7280" } }, fmtUSD(u.totalSpendUSD)),
@@ -506,16 +910,34 @@
                     )
                   )
                 ];
+                if (codeData && codeEmailKey && u.email.toLowerCase() === codeEmailKey.toLowerCase()) {
+                  const codeAud = (codeData.spendUsd || 0) * audRate;
+                  rows.push(React.createElement("tr", { key:`${u.email}-code`, style:{ borderBottom:"1px solid #f3f4f6", background:"#fffbeb" } },
+                    React.createElement("td", { style:{ padding:"6px 10px", fontStyle:"italic", color:COLOURS.captionText } }, u.name, " (Claude Code)"),
+                    React.createElement("td", { style:{ padding:"6px 10px", fontSize:11, color:COLOURS.captionText } }, "Separate billing"),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, fmtAUD(codeAud)),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, fmtUSD(codeData.spendUsd)),
+                    React.createElement("td", { style:{ padding:"6px 10px", fontSize:11 } }, `${fmt(codeData.codeLines || 0)} lines`),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, "—"),
+                    React.createElement("td", { style:{ padding:"6px 10px" } }, "")
+                  ));
+                }
                 if (isExpanded) {
                   rows.push(React.createElement("tr", { key:`${u.email}-exp`, style:{ borderBottom:"1px solid #f3f4f6" } },
-                    React.createElement("td", { colSpan:13, style:{ padding:"12px 20px", background:"#f8fafc" } },
+                    React.createElement("td", { colSpan:14, style:{ padding:"12px 20px", background:"#f8fafc" } },
                       React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16 } },
                         React.createElement("div", null,
                           React.createElement("div", { style:{ fontSize:11, fontWeight:600, color:"#6b7280", marginBottom:6 } }, "BY PRODUCT"),
                           ...Object.entries(u.productBreakdown).map(([p,v]) =>
                             React.createElement("div", { key:p, style:{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 } },
                               React.createElement("span", null, p),
-                              React.createElement("span", { style:{ fontWeight:600 } }, fmtAUD(v.spend * 1.55))
+                              React.createElement("span", { style:{ fontWeight:600 } }, fmtAUD(v.spend * audRate))
                             )
                           )
                         ),
@@ -530,7 +952,7 @@
                         ),
                         React.createElement("div", null,
                           React.createElement("div", { style:{ fontSize:11, fontWeight:600, color:"#6b7280", marginBottom:6 } }, "CONTEXT DEPTH"),
-                          React.createElement("div", { style:{ fontSize:20, fontWeight:800, color:"#1a3a5c" } }, fmtTokens(u.avgTokensPerRequest)),
+                          React.createElement("div", { style:{ fontSize:20, fontWeight:800, color:COLOURS.advisory } }, fmtTokens(u.avgTokensPerRequest)),
                           React.createElement("div", { style:{ fontSize:11, color:"#6b7280" } }, "avg tokens / request"),
                           React.createElement("div", { style:{ fontSize:11, color:"#9ca3af", marginTop:6 } }, `Prompt: ${fmtTokens(u.totalPromptTokens)}`),
                           React.createElement("div", { style:{ fontSize:11, color:"#9ca3af" } }, `Completion: ${fmtTokens(u.totalCompletionTokens)}`)
@@ -635,7 +1057,7 @@
             React.createElement("input", { type:"range", min:0, max:100, value:migrationPct, onChange:e=>setMigrationPct(parseInt(e.target.value)), style:{ width:"100%", marginBottom:10 } }),
             React.createElement("div", { style:{ display:"flex", gap:8, marginBottom:16 } },
               ...[["Conservative",30],["Target",60],["Aggressive",90]].map(([label,val]) =>
-                React.createElement("button", { key:label, onClick:()=>setMigrationPct(val), style:{ flex:1, padding:"6px 8px", border:"1px solid #d1d5db", borderRadius:6, fontSize:12, cursor:"pointer", background:migrationPct===val?"#1a3a5c":"#f9fafb", color:migrationPct===val?"#fff":"#374151" } }, `${label} (${val}%)`)
+                React.createElement("button", { key:label, onClick:()=>setMigrationPct(val), style:{ flex:1, padding:"6px 8px", border:"1px solid #d1d5db", borderRadius:6, fontSize:12, cursor:"pointer", background:migrationPct===val?COLOURS.advisory:"#f9fafb", color:migrationPct===val?"#fff":"#374151" } }, `${label} (${val}%)`)
               )
             ),
             React.createElement("div", { style:{ fontSize:11, color:"#9ca3af" } }, `Formula: saving = opus_spend × ${migrationPct/100} × (1 − 1/${ratio}) = ${fmtUSD(saving)}`)
@@ -650,8 +1072,32 @@
       );
     }
 
-    // Module 8
-    function Module8({ initiatives, setInitiatives, metrics }) {
+    function escapeHtml(s) {
+      return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function buildGovernanceReportHtml(reportPlain, dateRange) {
+      const today = new Date().toLocaleDateString(undefined, { dateStyle: "long" });
+      const body = escapeHtml(reportPlain || "").replace(/\n/g, "<br/>");
+      return `<!DOCTYPE html><html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>Frank Group AI Governance Report</title>
+<style>
+body{font-family:'Segoe UI',Arial,sans-serif;color:#1a1a1a;margin:0;padding:24px;line-height:1.45;}
+.cover{background:${COLOURS.advisory};color:#fff;padding:28px 32px;border-radius:8px;margin-bottom:20px;}
+.cover h1{margin:0 0 8px;font-size:22px;letter-spacing:0.02em;}
+.accent{display:inline-block;height:4px;width:120px;background:${COLOURS.accent};margin-top:12px;border-radius:2px;}
+.meta{font-size:13px;opacity:0.95;margin-top:8px;}
+.section{margin-top:20px;font-size:12px;}
+.footer{margin-top:28px;font-size:11px;color:#4a4a4a;border-top:1px solid #e5e7eb;padding-top:12px;}
+</style></head><body>
+<div class="cover"><h1>Frank Group — AI Governance Report</h1><div class="accent"></div>
+<div class="meta"><strong>Period:</strong> ${escapeHtml(dateRange || "Unknown period")}<br/><strong>Prepared:</strong> ${escapeHtml(today)}<br/>Prepared by: Travis Rowley · Confidential</div></div>
+<div class="section">${body}</div>
+<div class="footer">Frank Advisory · AI Governance Dashboard · Client-side generated · Metadata only (no conversation content)</div>
+</body></html>`;
+    }
+
+    // Module 7 — AI Committee Initiative Tracker
+    function Module7InitiativeTracker({ initiatives, setInitiatives, metrics }) {
       const [editId, setEditId]   = useState(null);
       const [form, setForm]       = useState({});
       const metricKeys = ["active_users_count","org_adoption_pct","frank_law_adoption_pct","org_opus_pct","total_tokens","avg_fluency_score"];
@@ -674,7 +1120,7 @@
       const exportJSON= () => { const b=new Blob([JSON.stringify(initiatives,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="initiatives.json"; a.click(); };
 
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 8 — AI Committee Initiative Tracker" }),
+        React.createElement(SectionHeader, { title:"Module 7 — AI Committee Initiative Tracker" }),
         React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10, marginBottom:12 } },
           ...enriched.map(init =>
             React.createElement("div", { key:init.id, style:{ border:"1px solid #e5e7eb", borderRadius:8, padding:"12px 14px", background:"#fafafa" } },
@@ -689,7 +1135,7 @@
                     ),
                     React.createElement("div", null, React.createElement("label", { style:{ fontSize:11, color:"#6b7280" } }, "Target"), React.createElement("input", { type:"number", value:form.targetValue, onChange:e=>setForm(f=>({...f,targetValue:e.target.value})), style:{ width:"100%", border:"1px solid #d1d5db", borderRadius:4, padding:"4px 6px", fontSize:12 } })),
                     React.createElement("div", { style:{ display:"flex", gap:4 } },
-                      React.createElement("button", { onClick:saveEdit, style:{ background:"#1a3a5c", color:"#fff", border:"none", borderRadius:4, padding:"4px 10px", fontSize:12, cursor:"pointer" } }, "Save"),
+                      React.createElement("button", { onClick:saveEdit, style:{ background:COLOURS.advisory, color:"#fff", border:"none", borderRadius:4, padding:"4px 10px", fontSize:12, cursor:"pointer" } }, "Save"),
                       React.createElement("button", { onClick:()=>setEditId(null), style:{ background:"none", border:"1px solid #d1d5db", borderRadius:4, padding:"4px 8px", fontSize:12, cursor:"pointer" } }, "✕")
                     )
                   )
@@ -714,14 +1160,14 @@
           )
         ),
         React.createElement("div", { style:{ display:"flex", gap:8 } },
-          React.createElement("button", { onClick:addNew, style:{ background:"#1a3a5c", color:"#fff", border:"none", borderRadius:6, padding:"8px 14px", fontSize:13, cursor:"pointer" } }, "+ Add Initiative"),
+          React.createElement("button", { onClick:addNew, style:{ background:COLOURS.advisory, color:"#fff", border:"none", borderRadius:6, padding:"8px 14px", fontSize:13, cursor:"pointer" } }, "+ Add Initiative"),
           React.createElement("button", { onClick:exportJSON, style:{ background:"none", border:"1px solid #d1d5db", borderRadius:6, padding:"8px 14px", fontSize:13, cursor:"pointer" } }, "Export JSON")
         )
       );
     }
 
-    // Module 7
-    function Module7({ users, metrics, initiatives, settings, dateRange }) {
+    // Module 8 — Report Generator
+    function Module8ReportGenerator({ users, metrics, initiatives, settings, dateRange }) {
       const [report, setReport] = useState("");
       const [copied, setCopied] = useState(false);
 
@@ -757,7 +1203,7 @@
           let flags = "";
           if (u.opusPct > 80) flags += "\n  ⚑ Recommend model review — defaulting to Opus for routine tasks";
           if (u.spendUtilisation > 75) flags += `\n  ⚑ Approaching spend limit (${fmtDec(u.spendUtilisation,0)}%)`;
-          return `[Tier ${u.fluencyTier}] ${u.name} (${u.entity})\n  Spend: ${fmtAUD(u.totalSpendAUD)} | Tokens: ${fmtTokens(u.totalTokens)} | Requests: ${fmt(u.totalRequests)} | Avg context: ${fmtTokens(u.avgTokensPerRequest)}\n  Model mix: ${fmtDec(u.opusPct,0)}% Opus / ${fmtDec(sonnetPct,0)}% Sonnet | Surfaces: ${prods}${flags}`;
+          return `[Tier ${u.fluencyTier}] ${u.name} (${u.entity}) | Seat: ${u.seatTier||"Standard"}\n  Spend: ${fmtAUD(u.totalSpendAUD)} | Tokens: ${fmtTokens(u.totalTokens)} | Requests: ${fmt(u.totalRequests)} | Avg context: ${fmtTokens(u.avgTokensPerRequest)}\n  Model mix: ${fmtDec(u.opusPct,0)}% Opus / ${fmtDec(sonnetPct,0)}% Sonnet | Surfaces: ${prods}${flags}`;
         }).join("\n\n");
 
         const inactiveBlock = users.filter(u=>u.totalRequests===0).map(u=>`— ${u.name} (${u.entity}): No activity this period`).join("\n");
@@ -825,16 +1271,156 @@ Generated by Frank Group AI Governance Dashboard`);
       };
 
       const copy = () => { navigator.clipboard.writeText(report).then(()=>{ setCopied(true); setTimeout(()=>setCopied(false),2000); }); };
-      const download = () => { const b=new Blob([report],{type:"text/plain"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download=`frank-group-ai-report-${new Date().toISOString().split("T")[0]}.txt`; a.click(); };
+      const downloadTxt = () => { const b=new Blob([report],{type:"text/plain"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download=`frank-group-ai-report-${new Date().toISOString().split("T")[0]}.txt`; a.click(); };
+      const downloadWord = () => {
+        if (!report) return;
+        const html = buildGovernanceReportHtml(report, dateRange);
+        const blob = new Blob(["\ufeff", html], { type: "application/msword" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `FrankGroup_AI_Governance_${new Date().toISOString().split("T")[0]}.doc`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      };
+      const printPdf = () => {
+        if (!report) return;
+        const html = buildGovernanceReportHtml(report, dateRange);
+        const w = window.open("", "_blank");
+        if (!w) return;
+        w.document.open();
+        w.document.write(html);
+        w.document.close();
+        w.focus();
+        setTimeout(() => { try { w.print(); } catch (e) {} }, 300);
+      };
 
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 7 — Report Generator" }),
-        React.createElement("div", { style:{ display:"flex", gap:10, marginBottom:16 } },
-          React.createElement("button", { onClick:generate, style:{ background:"#1a3a5c", color:"#fff", border:"none", borderRadius:6, padding:"10px 20px", fontSize:13, fontWeight:600, cursor:"pointer" } }, "Generate Report"),
+        React.createElement(SectionHeader, { title:"Module 8 — Report Generator" }),
+        React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:12 } }, "Generate first, then copy, download Word-compatible .doc, plain .txt, or use Print / Save as PDF (browser print dialog)."),
+        React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:10, marginBottom:16 } },
+          React.createElement("button", { onClick:generate, style:{ background:COLOURS.advisory, color:"#fff", border:"none", borderRadius:6, padding:"10px 20px", fontSize:13, fontWeight:600, cursor:"pointer" } }, "Generate Report"),
           report && React.createElement("button", { onClick:copy, style:{ background:copied?"#166534":"#fff", color:copied?"#fff":"#374151", border:"1px solid #d1d5db", borderRadius:6, padding:"10px 16px", fontSize:13, cursor:"pointer" } }, copied?"✓ Copied!":"Copy to Clipboard"),
-          report && React.createElement("button", { onClick:download, style:{ background:"#fff", color:"#374151", border:"1px solid #d1d5db", borderRadius:6, padding:"10px 16px", fontSize:13, cursor:"pointer" } }, "Download .txt")
+          report && React.createElement("button", { onClick:downloadWord, style:{ background:COLOURS.accent, color:"#1a1a1a", border:"none", borderRadius:6, padding:"10px 16px", fontSize:13, fontWeight:700, cursor:"pointer" } }, "Download .doc (Word)"),
+          report && React.createElement("button", { onClick:printPdf, style:{ background:"#fff", color:COLOURS.advisory, border:`1px solid ${COLOURS.advisory}`, borderRadius:6, padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer" } }, "Print / PDF"),
+          report && React.createElement("button", { onClick:downloadTxt, style:{ background:"#fff", color:"#374151", border:"1px solid #d1d5db", borderRadius:6, padding:"10px 16px", fontSize:13, cursor:"pointer" } }, "Download .txt")
         ),
         report && React.createElement("textarea", { readOnly:true, value:report, style:{ width:"100%", height:400, fontFamily:"monospace", fontSize:12, border:"1px solid #e5e7eb", borderRadius:6, padding:12, resize:"vertical", background:"#f8fafc", boxSizing:"border-box" } })
+      );
+    }
+
+    function getCoachingCopy(user) {
+      const positives = [];
+      const actions = [];
+      const conv = user.behavior?.conv || {};
+      const proj = user.behavior?.proj || {};
+      const mem = user.behavior?.mem || {};
+      const lastMs = conv.lastUpdate && conv.lastUpdate.getTime ? conv.lastUpdate.getTime() : (conv.lastUpdate ? new Date(conv.lastUpdate).getTime() : null);
+      const daysSince = lastMs ? (Date.now() - lastMs) / 86400000 : null;
+
+      if ((conv.count||0) >= 20) positives.push(`Strong Claude.ai habit — ${conv.count} conversations in this export.`);
+      else if ((conv.count||0) >= 5) positives.push(`Active on Claude.ai — ${conv.count} conversations captured.`);
+      else if ((conv.count||0) >= 1) positives.push(`Claude.ai export shows ${conv.count} conversation(s) — good foundation to build on.`);
+
+      if ((conv.avgDepth||0) >= 6) positives.push(`You work iteratively — ~${fmtDec(conv.avgDepth,1)} messages per conversation on average.`);
+      if ((proj.count||0) >= 1 && (proj.customPrompts||0) >= 1) positives.push("Projects with custom prompts — structured, repeatable workflows.");
+      else if ((proj.count||0) >= 1) positives.push(`Using ${proj.count} project(s) to organise context.`);
+
+      if ((mem.memoryLen||0) > 0) positives.push("Memory configured — less re-explaining each session.");
+
+      if (user.surfaceCount >= 3 && user.totalRequests > 0) positives.push(`${user.surfaceCount} product surfaces in team usage data — nice breadth.`);
+
+      if (user.opusPct < 50 && user.totalRequests > 0) positives.push(`Efficient model mix — ${fmtDec(100-user.opusPct,0)}% of spend off Opus.`);
+
+      while (positives.length < 2) positives.push("Every expert was once a beginner — small weekly experiments add up.");
+
+      if ((proj.count||0) === 0 && user.totalRequests > 0) actions.push("Create a Project for a recurring workflow so instructions and files stay in one place.");
+      if ((mem.memoryLen||0) === 0 && user.totalRequests > 0) actions.push("Add concise Memory bullets (role, preferences) to speed up every new chat.");
+      if ((conv.avgDepth||0) > 0 && (conv.avgDepth||0) < 2.5 && (conv.count||0) > 0) actions.push("Try multi-turn refinement: one improvement per message instead of one-shot prompts.");
+      if (user.surfaceCount <= 1 && user.totalRequests > 0) actions.push("Try another surface where it fits (Cowork for long docs, Research for synthesis).");
+      if (user.opusPct > 70 && user.totalRequests > 0) actions.push("Shift routine drafting to Sonnet; keep Opus for judgement-heavy work only.");
+      if (daysSince != null && daysSince > 7 && user.totalRequests > 0) actions.push("No Claude.ai activity in the last week in this export — even a quick task keeps momentum.");
+
+      while (actions.length < 2) actions.push("Pick one task to template this week; reuse the prompt next time.");
+
+      const encouragement = user.fluencyTier <= 2
+        ? "Solid momentum — consider sharing one playbook with a teammate."
+        : "Small upgrades compound — one focused habit for seven days.";
+
+      return { positives: positives.slice(0, 3), actions: actions.slice(0, 3), encouragement };
+    }
+
+    function spotlightCategories(users) {
+      const spots = [];
+      for (const { re, label } of COACHING_KEYWORDS) {
+        let best = null, bestN = 0;
+        for (const u of users) {
+          const names = u.behavior?.conv?.names || [];
+          const n = names.filter(nm => re.test(String(nm))).length;
+          if (n > bestN) { bestN = n; best = u; }
+        }
+        if (best && bestN > 0) spots.push({ label, name: best.name, n: bestN });
+      }
+      return spots.slice(0, 5);
+    }
+
+    // Module 9 — Coaching & leaderboard
+    function Module9Coaching({ users, metrics, hasBehaviorData }) {
+      const ranked = [...users].sort((a, b) => b.fluencyScore - a.fluencyScore);
+      const seatTotal = Object.keys(USERS_MAP).length;
+      const activeSeats = users.filter(u => u.totalRequests > 0).length;
+      const milestoneAllActive = activeSeats >= seatTotal;
+      const milestoneFluency = metrics.avg_fluency_score >= 60;
+      const spots = spotlightCategories(users);
+
+      return React.createElement(Card, null,
+        React.createElement(SectionHeader, { title:"Module 9 — Coaching & Fluency Leaderboard" }),
+        React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:14 } },
+          "Rule-based coaching from usage metadata and conversation titles only — no message content is loaded or displayed."
+        ),
+        (milestoneAllActive || milestoneFluency) && React.createElement("div", { style:{ background:`linear-gradient(90deg, ${COLOURS.advisory}, #2a1f55)`, color:"#fff", borderRadius:8, padding:"12px 16px", marginBottom:16, fontSize:13, borderLeft:`4px solid ${COLOURS.accent}` } },
+          React.createElement("strong", null, "Team milestone: "),
+          milestoneAllActive && "All seats show activity this period. ",
+          milestoneFluency && `Org avg fluency ≥ 60 (${fmtDec(metrics.avg_fluency_score,1)}). `,
+          "Nice work, Frank Group."
+        ),
+        React.createElement("div", { style:{ fontSize:14, fontWeight:700, color:COLOURS.advisory, marginBottom:10 } }, "Fluency leaderboard"),
+        React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:8, marginBottom:22 } },
+          ...ranked.map((u, i) =>
+            React.createElement("div", { key:u.email, style:{ display:"flex", alignItems:"center", gap:12, padding:"10px 12px", borderRadius:8, border:"1px solid #e5e7eb", background: i===0 ? "#f5f3ff" : "#fafafa" } },
+              React.createElement("div", { style:{ fontWeight:800, color:COLOURS.advisory, width:28 } }, `#${i+1}`),
+              React.createElement("div", { style:{ flex:1, fontWeight:600 } }, u.name, i===0 && React.createElement("span", { style:{ marginLeft:8, fontSize:11, color:COLOURS.accent } }, "Top")),
+              React.createElement(Badge, { tier:u.fluencyTier }),
+              React.createElement("div", { style:{ fontWeight:800, color:COLOURS.accent, minWidth:56, textAlign:"right" } }, `${fmtDec(u.fluencyScore,1)} pts`)
+            )
+          )
+        ),
+        spots.length > 0 && React.createElement("div", { style:{ marginBottom:20 } },
+          React.createElement("div", { style:{ fontSize:14, fontWeight:700, color:COLOURS.advisory, marginBottom:8 } }, "Cross-team learning (from conversation titles)"),
+          ...spots.map(s =>
+            React.createElement("div", { key:s.label, style:{ fontSize:12, color:COLOURS.bodyText, marginBottom:4 } },
+              React.createElement("strong", null, s.label), ` — ${s.name} leads with ${s.n} titled thread(s) in this export.`
+            )
+          )
+        ),
+        React.createElement("div", { style:{ fontSize:14, fontWeight:700, color:COLOURS.advisory, marginBottom:10 } }, "Personalised nudges"),
+        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:14 } },
+          ...users.map(u => {
+            const { positives, actions, encouragement } = getCoachingCopy(u);
+            return React.createElement("div", { key:u.email, style:{ border:"1px solid #e5e7eb", borderRadius:8, padding:14, background:"#fff" } },
+              React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, flexWrap:"wrap", gap:6 } },
+                React.createElement("span", { style:{ fontWeight:700, color:COLOURS.advisory } }, u.name),
+                React.createElement(Badge, { tier:u.fluencyTier })
+              ),
+              React.createElement("div", { style:{ fontSize:11, color:COLOURS.captionText, marginBottom:8 } }, u.entity, " · ", u.seatTier || "Standard", " seat"),
+              React.createElement("div", { style:{ fontSize:12, fontWeight:600, marginBottom:4, color:COLOURS.accent } }, "What you're doing well"),
+              ...positives.map((t, i) => React.createElement("div", { key:`p${i}`, style:{ fontSize:12, color:COLOURS.bodyText, marginBottom:3 } }, "• ", t)),
+              React.createElement("div", { style:{ fontSize:12, fontWeight:600, margin:"10px 0 4px", color:COLOURS.advisory } }, "To level up"),
+              ...actions.map((t, i) => React.createElement("div", { key:`a${i}`, style:{ fontSize:12, color:COLOURS.bodyText, marginBottom:3 } }, "• ", t)),
+              React.createElement("div", { style:{ fontSize:11, color:COLOURS.captionText, marginTop:10, fontStyle:"italic" } }, encouragement),
+              !hasBehaviorData && React.createElement("div", { style:{ fontSize:10, color:"#9ca3af", marginTop:8 } }, "Upload Claude.ai export for richer coaching signals.")
+            );
+          })
+        )
       );
     }
 
@@ -848,11 +1434,27 @@ Generated by Frank Group AI Governance Dashboard`);
       const [settings, setSettings]     = useState({ audRate:1.55, opusSonnetRatio:5, totalSeats:8 });
       const [initiatives, setInitiatives] = useState(DEFAULT_INITIATIVES);
       const [spendOverrides, setSpendOverrides] = useState({});
+      const [convItems, setConvItems]   = useState([]);
+      const [projItems, setProjItems]   = useState([]);
+      const [memItems, setMemItems]     = useState([]);
+      const [uuidOverlay, setUuidOverlay] = useState({});
+      const [userMetaByEmail, setUserMetaByEmail] = useState({});
+      const [codeData, setCodeData]     = useState(null);
+      const [codeFileName, setCodeFileName] = useState(null);
+      const [audLoading, setAudLoading] = useState(false);
+      const [audRateUpdated, setAudRateUpdated] = useState(null);
+
+      const uuidMap = useMemo(() => mergeUuidMap(uuidOverlay), [uuidOverlay]);
+
+      const behavior = useMemo(
+        () => buildBehaviorMaps(convItems, projItems, memItems, uuidMap, userMetaByEmail),
+        [convItems, projItems, memItems, uuidMap, userMetaByEmail]
+      );
 
       const rows = rawRows || SAMPLE_DATA;
 
       const users = useMemo(() => {
-        const agg = aggregateData(rows, settings.audRate);
+        const agg = aggregateData(rows, settings.audRate, behavior);
         return agg.map(u => {
           if (spendOverrides[u.email] !== undefined) {
             const limit = spendOverrides[u.email];
@@ -860,7 +1462,7 @@ Generated by Frank Group AI Governance Dashboard`);
           }
           return u;
         });
-      }, [rows, settings.audRate, spendOverrides]);
+      }, [rows, settings.audRate, spendOverrides, behavior]);
 
       const metrics = useMemo(() => {
         const active   = users.filter(u=>u.totalRequests>0);
@@ -890,32 +1492,61 @@ Generated by Frank Group AI Governance Dashboard`);
       }, [settings.audRate]);
 
       const handleClear = () => { setRawRows(null); setFileName(null); setDateRange(null); setDataInfo(null); };
+      const handleClearExport = () => {
+        setConvItems([]); setProjItems([]); setMemItems([]); setUuidOverlay({}); setUserMetaByEmail({}); setCodeData(null); setCodeFileName(null);
+      };
+
+      const refreshAud = useCallback(async () => {
+        setAudLoading(true);
+        try {
+          const r = await fetch("https://api.frankfurter.app/latest?from=USD&to=AUD");
+          const j = await r.json();
+          const rate = j && j.rates && j.rates.AUD;
+          if (rate && !isNaN(rate)) {
+            setSettings(s => ({ ...s, audRate: rate }));
+            setAudRateUpdated(new Date().toISOString());
+          }
+        } catch (e) { /* keep manual rate */ }
+        setAudLoading(false);
+      }, []);
+
       const updateSettings = patch => setSettings(s=>({...s,...patch}));
       const updateLimit = (email,val) => setSpendOverrides(p=>({...p,[email]:val}));
 
-      return React.createElement("div", { style:{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", background:"#f1f5f9", minHeight:"100vh", padding:24 } },
-        // Header
-        React.createElement("div", { style:{ background:"#1a3a5c", color:"#fff", borderRadius:10, padding:"20px 28px", marginBottom:24, display:"flex", justifyContent:"space-between", alignItems:"center" } },
+      return React.createElement("div", { style:{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", background:"#f1f5f9", minHeight:"100vh", padding:24, color:COLOURS.bodyText } },
+        React.createElement("div", { style:{ background:COLOURS.advisory, color:"#fff", borderRadius:10, padding:"20px 28px", marginBottom:24, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12, borderLeft:`6px solid ${COLOURS.accent}` } },
           React.createElement("div", null,
-            React.createElement("div", { style:{ fontSize:22, fontWeight:800, letterSpacing:0.5 } }, "Frank Group AI Governance Dashboard"),
-            React.createElement("div", { style:{ fontSize:13, color:"#93c5fd", marginTop:4 } }, "Frank Advisory · Frank Law · Phase 1")
+            React.createElement("div", { style:{ fontSize:12, fontWeight:700, color:COLOURS.accent, letterSpacing:2, textTransform:"uppercase" } }, "The Frank Group"),
+            React.createElement("div", { style:{ fontSize:22, fontWeight:800, letterSpacing:0.3 } }, "AI Governance Dashboard"),
+            React.createElement("div", { style:{ fontSize:13, opacity:0.9, marginTop:4 } }, "Frank Advisory · Frank Law · Phase 1.5")
           ),
-          React.createElement("div", null,
-            !rawRows && React.createElement("div", { style:{ fontSize:11, background:"#2563eb", color:"#fff", padding:"4px 12px", borderRadius:9999 } }, "Demo mode — upload CSV to load real data"),
-            rawRows  && React.createElement("div", { style:{ fontSize:11, background:"#166534", color:"#fff", padding:"4px 12px", borderRadius:9999 } }, `Live: ${dateRange}`)
+          React.createElement("div", { style:{ textAlign:"right" } },
+            !rawRows && React.createElement("div", { style:{ fontSize:11, background:"#3a4a7c", color:"#fff", padding:"4px 12px", borderRadius:9999 } }, "Demo mode — upload CSV to load real data"),
+            rawRows  && React.createElement("div", { style:{ fontSize:11, background:COLOURS.accent, color:"#1a1a1a", padding:"4px 12px", borderRadius:9999, fontWeight:700 } }, `Live: ${dateRange}`)
           )
         ),
         React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:20 } },
-          React.createElement(Module1, { onData:handleData, onSettings:updateSettings, settings, fileName, dataInfo, onClear:handleClear }),
-          React.createElement(Module2, { users, settings, metrics }),
+          React.createElement(Module1, {
+            onData:handleData, onSettings:updateSettings, settings, fileName, dataInfo, onClear:handleClear,
+            onConvItems: (items) => setConvItems(items),
+            onProjItems: (items) => setProjItems(items),
+            onMemItems: (items) => setMemItems(items),
+            onUsersOverlay: (map, meta) => { setUuidOverlay(prev => ({ ...prev, ...map })); setUserMetaByEmail(prev => ({ ...prev, ...meta })); },
+            onCodeRow: (row, name) => { setCodeData(row); setCodeFileName(name); },
+            convCount: convItems.length, projCount: projItems.length, memCount: memItems.length,
+            codeLines: codeData ? codeData.codeLines : 0, codeFileName,
+            refreshAud, audLoading, audRateUpdated, onClearExport: handleClearExport,
+          }),
+          React.createElement(Module2, { users, settings, metrics, hasBehaviorData: behavior.hasBehaviorData }),
           React.createElement(Module3, { users, metrics }),
-          React.createElement(Module4, { users, onUpdateLimit:updateLimit }),
+          React.createElement(Module4, { users, onUpdateLimit:updateLimit, audRate: settings.audRate, codeData }),
           React.createElement(Module5, { users }),
           React.createElement(Module6, { users, settings, dateRange }),
-          React.createElement(Module8, { initiatives, setInitiatives, metrics }),
-          React.createElement(Module7, { users, metrics, initiatives, settings, dateRange })
+          React.createElement(Module7InitiativeTracker, { initiatives, setInitiatives, metrics }),
+          React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange }),
+          React.createElement(Module9Coaching, { users, metrics, hasBehaviorData: behavior.hasBehaviorData })
         ),
-        React.createElement("div", { style:{ textAlign:"center", color:"#9ca3af", fontSize:11, marginTop:24, paddingBottom:12 } }, "Frank Group AI Governance Dashboard · Phase 1 · Client-side only · No data leaves your browser")
+        React.createElement("div", { style:{ textAlign:"center", color:"#9ca3af", fontSize:11, marginTop:24, paddingBottom:12 } }, "Frank Group AI Governance Dashboard · Phase 1.5 · Client-side only · No data leaves your browser")
       );
     }
 
