@@ -13,17 +13,22 @@
 ## File map
 
 ```
-index.html          ← THE live file. All dashboard code is inline here (JSX via Babel standalone).
-dashboard.jsx       ← Dev/reference copy of the React component (same code as index.html).
-package.json        ← Railway start command: npx serve . --listen $PORT --no-clipboard
-railway.toml        ← Railway deploy config
-.gitignore          ← .DS_Store, .env, node_modules
-README.md           ← Public-facing docs
-DEPLOYMENT.md       ← Deployment reference (adapted from previous projects)
-PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md  ← Full spec
+index.html                  ← THE live file. All dashboard code is inline here (JSX via Babel standalone).
+package.json                ← Railway start command: npx serve . --listen $PORT --no-clipboard
+railway.toml                ← Railway deploy config
+.gitignore                  ← .DS_Store, .env, node_modules
+README.md                   ← Public-facing docs (GitHub)
+CLAUDE.md                   ← This file — session handoff for Claude Code
+
+src/
+  dashboard.jsx             ← Dev/reference copy of the React component (same code as index.html)
+
+docs/
+  DEPLOYMENT.md             ← Full git + Railway deploy workflow
+  PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md  ← Full product spec
 ```
 
-**Important:** `index.html` is the source of truth. When making changes, edit `index.html`. Keep `dashboard.jsx` in sync if you change shared logic.
+**Important:** `index.html` is the source of truth. When making changes, edit `index.html`. Keep `src/dashboard.jsx` in sync if you change shared logic.
 
 ---
 

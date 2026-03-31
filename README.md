@@ -75,11 +75,18 @@ Railway URL: check the Railway dashboard → your service → **Settings → Dom
 ## Architecture
 
 ```
-index.html          ← Entry point. Loads CDN deps + inlines all JSX via Babel.
-dashboard.jsx       ← Source component (reference / dev copy).
-package.json        ← Tells Railway to run: npx serve . --listen $PORT
-railway.toml        ← Railway deploy config (healthcheck, restart policy)
-.gitignore          ← Excludes .DS_Store, .env, node_modules
+index.html              ← Entry point. Loads CDN deps + inlines all JSX via Babel.
+package.json            ← Tells Railway to run: npx serve . --listen $PORT
+railway.toml            ← Railway deploy config (healthcheck, restart policy)
+.gitignore              ← Excludes .DS_Store, .env, node_modules
+CLAUDE.md               ← Session handoff file for Claude Code
+
+src/
+  dashboard.jsx         ← Source component (reference / dev copy)
+
+docs/
+  DEPLOYMENT.md         ← Full git + Railway deploy workflow
+  PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md  ← Full product spec
 ```
 
 **No build step.** Babel compiles JSX in-browser at load time. All data processing is client-side. No API calls, no auth, no database.
@@ -94,4 +101,4 @@ railway.toml        ← Railway deploy config (healthcheck, restart policy)
 - Historical WoW / MoM trend charts
 - Auth via email domain restriction
 
-See `PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md` for full spec.
+See `docs/PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md` for full spec.
