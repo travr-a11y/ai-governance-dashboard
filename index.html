@@ -546,6 +546,23 @@
         });
     }
 
+    function daysBetween(a, b) {
+      return Math.round((new Date(b) - new Date(a)) / 86400000) + 1;
+    }
+
+    // Convert usage_rows DB shape → rawRows shape that aggregateData expects
+    function usageRowsToRawRows(dbRows) {
+      return dbRows.map(r => ({
+        user_email: r.user_email,
+        model: r.model_id,
+        product: r.product || "",
+        total_requests: r.requests,
+        total_prompt_tokens: r.prompt_tokens,
+        total_completion_tokens: r.completion_tokens,
+        total_net_spend_usd: r.net_spend_usd,
+      }));
+    }
+
     async function sha256HexFromUtf8(str) {
       const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
       return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
@@ -561,12 +578,12 @@
         const content_hash = await sha256HexFromUtf8(text);
         const { data: existing, error: qErr } = await supabase
           .from("uploads")
-          .select("id,file_name")
+          .select("id,file_name,uploaded_at")
           .eq("content_hash", content_hash)
           .maybeSingle();
         if (qErr) console.warn("uploads content_hash lookup:", qErr);
         if (existing) {
-          if (onDuplicate) onDuplicate(file.name);
+          if (onDuplicate) onDuplicate(file.name, existing.uploaded_at);
           if (onDone) onDone();
           return;
         }
@@ -594,7 +611,7 @@
           .single();
         if (e2) {
           const dup = e2.code === "23505" || String(e2.message || "").toLowerCase().includes("duplicate");
-          if (dup && onDuplicate) onDuplicate(file.name);
+          if (dup && onDuplicate) onDuplicate(file.name, null);
           else console.warn("Supabase uploads insert failed:", e2);
           const { error: rmErr } = await supabase.storage.from("uploads").remove([path]);
           if (rmErr) console.warn("Supabase storage rollback (orphan) failed:", rmErr);
@@ -1133,13 +1150,12 @@
       refreshAud, audLoading, audRateUpdated,
       persistToCloud,
       storedUploads,
-      onSavePeriod,
-      savingPeriod,
-      periodSaveMsg,
+      onPeriodsChanged,
     }) {
       const [dragIngest, setDragIngest] = useState(false);
       const [error, setError] = useState(null);
       const [ingestNote, setIngestNote] = useState(null);
+      const [duplicateWarnings, setDuplicateWarnings] = useState([]);
 
       const readFileText = useCallback(file => new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -1160,11 +1176,11 @@
         const files = [...fileList].filter(Boolean);
         if (!files.length) return;
         const allErrs = [];
-        const dupNotes = [];
         const supa = persistToCloud && persistToCloud.supabase;
         const email = persistToCloud && persistToCloud.userEmail;
         const invokeRag = persistToCloud && persistToCloud.invokeRagAfterUpload;
         setIngestNote(null);
+        setDuplicateWarnings([]);
         for (const file of files) {
           try {
             const text = await readFileText(file);
@@ -1177,9 +1193,14 @@
                 file,
                 fileType,
                 text,
-                persistToCloud.onUploadsChanged,
+                () => {
+                  persistToCloud.onUploadsChanged();
+                  if (typeof onPeriodsChanged === "function") onPeriodsChanged();
+                },
                 {
-                  onDuplicate: () => dupNotes.push(`${file.name}: duplicate skipped (same file already in cloud)`),
+                  onDuplicate: (fileName, uploadedAt) => {
+                    setDuplicateWarnings(prev => [...prev, { fileName, uploadedAt }]);
+                  },
                   invokeRag,
                 }
               );
@@ -1189,8 +1210,7 @@
           }
         }
         setError(allErrs.length ? allErrs.join(" · ") : null);
-        setIngestNote(dupNotes.length ? dupNotes.join(" · ") : null);
-      }, [readFileText, processIngestFile, persistToCloud]);
+      }, [readFileText, processIngestFile, persistToCloud, onPeriodsChanged]);
 
       const onDropIngest = useCallback(e => {
         e.preventDefault();
@@ -1228,6 +1248,30 @@
         },
           React.createElement("span", { style:{ width:7, height:7, borderRadius:"50%", background:"currentColor", display:"inline-block", flexShrink:0 } }),
           cloudPillText
+        ),
+        duplicateWarnings.length > 0 && React.createElement("div", { style: { marginBottom: 12 } },
+          duplicateWarnings.map((w, i) =>
+            React.createElement("div", {
+              key: i,
+              style: {
+                display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+                background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 6,
+                padding: "8px 12px", marginBottom: 6, fontSize: 12, color: "#92400e",
+              },
+            },
+              React.createElement("span", null,
+                React.createElement("strong", null, w.fileName),
+                " was already uploaded",
+                w.uploadedAt ? ` on ${new Date(w.uploadedAt).toLocaleString()}` : "",
+                ". No action taken."
+              ),
+              React.createElement("button", {
+                type: "button",
+                onClick: () => setDuplicateWarnings(prev => prev.filter((_, j) => j !== i)),
+                style: { background: "none", border: "none", cursor: "pointer", color: "#92400e", fontWeight: 700, fontSize: 14, padding: "0 0 0 8px", lineHeight: 1 },
+              }, "×")
+            )
+          )
         ),
         React.createElement("div", {
           onDragOver: e => { e.preventDefault(); setDragIngest(true); },
@@ -1332,31 +1376,6 @@
                   )
                 )
               )
-        ),
-        persistToCloud && fileName && React.createElement("div", {
-          style: { marginBottom: 14 },
-        },
-          React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" } },
-            React.createElement("button", {
-              type: "button",
-              onClick: onSavePeriod,
-              disabled: savingPeriod,
-              style: {
-                padding: "8px 16px", borderRadius: 6, border: "none",
-                background: savingPeriod ? "#94a3b8" : COLOURS.primary,
-                color: "#fff", fontWeight: 700, fontSize: 13,
-                cursor: savingPeriod ? "wait" : "pointer",
-              },
-            }, savingPeriod ? "Saving\u2026" : "Save period snapshot"),
-            periodSaveMsg && React.createElement("span", {
-              style: {
-                fontSize: 12, fontWeight: 600,
-                color: periodSaveMsg.startsWith("Save failed") ? "#dc2626" : "#15803d",
-              },
-            }, periodSaveMsg)
-          ),
-          React.createElement("div", { style: { fontSize: 11, color: COLOURS.captionText, marginTop: 4 } },
-            "Writes current period metrics to Supabase so trend charts can show historical data.")
         ),
         React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:12, marginBottom:14 } },
           React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:6 } },
@@ -2405,10 +2424,16 @@ Generated by Frank Group AI Governance Dashboard`);
       const [uploadsRefreshKey, setUploadsRefreshKey] = useState(0);
       const [trendRefreshKey, setTrendRefreshKey] = useState(0);
       const settingsLoadedFromDbRef = React.useRef(false);
-      const [savingPeriod, setSavingPeriod] = useState(false);
-      const [periodSaveMsg, setPeriodSaveMsg] = useState("");
       const [seatsFromDb, setSeatsFromDb] = useState(null);
       const [modelTrendRows, setModelTrendRows] = useState([]);
+      const [dateRangeFrom, setDateRangeFrom] = useState(null);
+      const [dateRangeTo, setDateRangeTo] = useState(null);
+      const [availablePeriods, setAvailablePeriods] = useState([]);
+      const [periodsLoading, setPeriodsLoading] = useState(false);
+      const [selectedPeriodId, setSelectedPeriodId] = useState(null);
+      const [periodsRefreshKey, setPeriodsRefreshKey] = useState(0);
+      const [usageRowsData, setUsageRowsData] = useState(null);
+      const [usageRowsLoading, setUsageRowsLoading] = useState(false);
 
       const ingestHandlersRef = React.useRef({});
       const autoCloudIngestDoneRef = React.useRef(false);
@@ -2490,6 +2515,52 @@ Generated by Frank Group AI Governance Dashboard`);
       }, [supabaseClient]);
 
       const bumpUploadsRefresh = useCallback(() => setUploadsRefreshKey(k => k + 1), []);
+      const bumpPeriodsRefresh = useCallback(() => setPeriodsRefreshKey(k => k + 1), []);
+
+      // ── Load available periods from Supabase ──────────────────────────────────
+      useEffect(() => {
+        if (!supabaseClient) { setAvailablePeriods([]); return undefined; }
+        let cancelled = false;
+        setPeriodsLoading(true);
+        supabaseClient
+          .from("periods")
+          .select("id, label, date_from, date_to, is_auto")
+          .order("date_from", { ascending: false })
+          .then(({ data, error }) => {
+            if (cancelled) return;
+            if (!error && data?.length) {
+              setAvailablePeriods(data);
+              // Auto-select the most recent period on first load
+              setDateRangeFrom(prev => prev || data[0].date_from);
+              setDateRangeTo(prev => prev || data[0].date_to);
+              setSelectedPeriodId(prev => prev || data[0].id);
+            }
+            setPeriodsLoading(false);
+          });
+        return () => { cancelled = true; };
+      }, [supabaseClient, periodsRefreshKey]);
+
+      // ── Fetch usage_rows for selected date range ───────────────────────────────
+      useEffect(() => {
+        if (!supabaseClient || !dateRangeFrom || !dateRangeTo) {
+          setUsageRowsData(null);
+          return undefined;
+        }
+        let cancelled = false;
+        setUsageRowsLoading(true);
+        supabaseClient
+          .from("usage_rows")
+          .select("user_email, model_id, model_class, product, requests, prompt_tokens, completion_tokens, total_tokens, net_spend_usd, row_date, upload_id")
+          .gte("row_date", dateRangeFrom)
+          .lte("row_date", dateRangeTo)
+          .then(({ data, error }) => {
+            if (cancelled) return;
+            if (!error && data?.length) setUsageRowsData(data);
+            else setUsageRowsData(null);
+            setUsageRowsLoading(false);
+          });
+        return () => { cancelled = true; };
+      }, [supabaseClient, dateRangeFrom, dateRangeTo]);
 
       const invokeRagAfterUpload = useCallback(uploadId => {
         if (!supabaseClient || !uploadId) return;
@@ -2504,9 +2575,10 @@ Generated by Frank Group AI Governance Dashboard`);
           supabase: supabaseClient,
           userEmail: authSession?.user?.email || null,
           onUploadsChanged: bumpUploadsRefresh,
+          onPeriodsChanged: bumpPeriodsRefresh,
           invokeRagAfterUpload,
         };
-      }, [supabaseClient, authSession, bumpUploadsRefresh, invokeRagAfterUpload]);
+      }, [supabaseClient, authSession, bumpUploadsRefresh, bumpPeriodsRefresh, invokeRagAfterUpload]);
 
       useEffect(() => {
         if (!persistToCloud) {
@@ -2596,7 +2668,10 @@ Generated by Frank Group AI Governance Dashboard`);
         [convItems, projItems, memItems, uuidMap, userMetaByEmail]
       );
 
-      const rows = rawRows || SAMPLE_DATA;
+      const rows = useMemo(
+        () => usageRowsData ? usageRowsToRawRows(usageRowsData) : (rawRows || SAMPLE_DATA),
+        [usageRowsData, rawRows]
+      );
 
       const liveUsersBase = useMemo(() => {
         const agg = aggregateData(rows, settings.audRate, behavior, codeData, seatsFromDb);
@@ -2683,97 +2758,6 @@ Generated by Frank Group AI Governance Dashboard`);
         setAudLoading(false);
       }, []);
 
-      const handleSavePeriod = useCallback(async () => {
-        if (!supabaseClient || !rawRows || !users.length) return;
-        setSavingPeriod(true);
-        setPeriodSaveMsg("");
-        try {
-          const date_from = dateRange ? dateRange.split(" to ")[0] || null : null;
-          const date_to   = dateRange ? dateRange.split(" to ")[1] || null : null;
-          const label     = (date_from && date_to) ? `${date_from} to ${date_to}` : "Manual snapshot";
-
-          if (date_from && date_to) {
-            const { data: existing } = await supabaseClient
-              .from("periods")
-              .select("id")
-              .eq("date_from", date_from)
-              .eq("date_to", date_to)
-              .maybeSingle();
-            if (existing) {
-              await supabaseClient.from("periods").delete().eq("id", existing.id);
-            }
-          }
-
-          const { data: period, error: insErr } = await supabaseClient
-            .from("periods")
-            .insert({ label, date_from: date_from || null, date_to: date_to || null })
-            .select("id")
-            .single();
-          if (insErr || !period) throw insErr || new Error("Failed to insert period");
-
-          const periodId = period.id;
-          const periodUserRows = users.map(u => ({
-            period_id:        periodId,
-            email:            u.email,
-            name:             u.name,
-            entity:           u.entity,
-            seat_tier:        u.seatTier,
-            total_spend_usd:  u.totalSpendUSD,
-            total_tokens:     u.totalTokens,
-            total_requests:   u.totalRequests,
-            opus_pct:         u.opusPct,
-            fluency_score:    u.fluencyScore,
-            fluency_tier:     u.fluencyTier,
-            model_breakdown:  u.modelBreakdown,
-            product_breakdown: u.productBreakdown,
-            code_spend_usd:   u.codeSpendUSD || null,
-            code_tokens:      u.codeTokens   || null,
-          }));
-
-          const { error: puErr } = await supabaseClient.from("period_users").insert(periodUserRows);
-          if (puErr) throw puErr;
-
-          // Build normalised breakdown rows for SQL analytics
-          const modelBreakdownRows = [];
-          const productBreakdownRows = [];
-          for (const u of users) {
-            for (const [modelClass, data] of Object.entries(u.modelBreakdown || {})) {
-              if (data.spend > 0 || data.tokens > 0) {
-                modelBreakdownRows.push({
-                  period_id: periodId, email: u.email,
-                  model_class: modelClass,
-                  spend_usd: data.spend || 0, tokens: data.tokens || 0, requests: data.requests || 0,
-                });
-              }
-            }
-            for (const [product, data] of Object.entries(u.productBreakdown || {})) {
-              if (data.spend > 0 || data.tokens > 0) {
-                productBreakdownRows.push({
-                  period_id: periodId, email: u.email,
-                  product,
-                  spend_usd: data.spend || 0, tokens: data.tokens || 0, requests: data.requests || 0,
-                });
-              }
-            }
-          }
-          await Promise.all([
-            modelBreakdownRows.length
-              ? supabaseClient.from("period_model_breakdown").insert(modelBreakdownRows)
-              : Promise.resolve(),
-            productBreakdownRows.length
-              ? supabaseClient.from("period_product_breakdown").insert(productBreakdownRows)
-              : Promise.resolve(),
-          ]);
-
-          setTrendRefreshKey(k => k + 1);
-          setPeriodSaveMsg("Period saved.");
-          setTimeout(() => setPeriodSaveMsg(""), 3000);
-        } catch (e) {
-          setPeriodSaveMsg(`Save failed: ${e?.message || e}`);
-          setTimeout(() => setPeriodSaveMsg(""), 6000);
-        }
-        setSavingPeriod(false);
-      }, [supabaseClient, rawRows, users, dateRange]);
 
       // ── Initiative CRUD callbacks (row-level DB ops + local state) ───────────
       const handleInitiativeAdd = useCallback(async () => {
@@ -2821,8 +2805,25 @@ Generated by Frank Group AI Governance Dashboard`);
         [rawRows, dateRange]
       );
 
-      const periodAccent = reportingPeriod.tone === "live" ? COLOURS.accent : reportingPeriod.tone === "demo" ? "#3a4a7c" : "#94a3b8";
-      const reportDateRange = dateRange;
+      // Determine the effective date range label for the header banner
+      const activeDateFrom = dateRangeFrom;
+      const activeDateTo = dateRangeTo;
+      const activeperiodLabel = useMemo(() => {
+        if (activeDateFrom && activeDateTo) {
+          const matchedPeriod = availablePeriods.find(p => p.date_from === activeDateFrom && p.date_to === activeDateTo);
+          const days = daysBetween(activeDateFrom, activeDateTo);
+          const label = matchedPeriod ? matchedPeriod.label : `${activeDateFrom} → ${activeDateTo}`;
+          return `${label} · ${days} day${days !== 1 ? "s" : ""}`;
+        }
+        return null;
+      }, [activeDateFrom, activeDateTo, availablePeriods]);
+
+      const periodAccent = (activeDateFrom && activeDateTo) ? COLOURS.accent
+        : reportingPeriod.tone === "live" ? COLOURS.accent
+        : reportingPeriod.tone === "demo" ? "#3a4a7c" : "#94a3b8";
+      const reportDateRange = activeDateFrom && activeDateTo
+        ? `${activeDateFrom} to ${activeDateTo}`
+        : dateRange;
 
       const hasBehaviorDataForModules = behavior.hasBehaviorData;
 
@@ -2928,9 +2929,7 @@ Generated by Frank Group AI Governance Dashboard`);
         audRateUpdated,
         persistToCloud,
         storedUploads: storedUploadsForModule,
-        onSavePeriod: handleSavePeriod,
-        savingPeriod,
-        periodSaveMsg,
+        onPeriodsChanged: bumpPeriodsRefresh,
       }), [
         handleData,
         updateSettings,
@@ -2956,9 +2955,7 @@ Generated by Frank Group AI Governance Dashboard`);
         audRateUpdated,
         persistToCloud,
         storedUploadsForModule,
-        handleSavePeriod,
-        savingPeriod,
-        periodSaveMsg,
+        bumpPeriodsRefresh,
       ]);
 
       return React.createElement("div", { style:{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", background:"#f1f5f9", minHeight:"100vh", padding:24, color:COLOURS.bodyText } },
@@ -2969,18 +2966,73 @@ Generated by Frank Group AI Governance Dashboard`);
             React.createElement("div", { style:{ fontSize:13, opacity:0.9, marginTop:4 } }, "Frank Advisory · Frank Law · Phase 2 preview")
           ),
           React.createElement("div", { style:{ textAlign:"right" } },
-            !rawRows && React.createElement("div", { style:{ fontSize:11, background:"#3a4a7c", color:"#fff", padding:"4px 12px", borderRadius:9999 } }, "Demo mode — upload CSV to load real data"),
-            rawRows && React.createElement("div", { style:{ fontSize:11, background:COLOURS.accent, color:"#1a1a1a", padding:"4px 12px", borderRadius:9999, fontWeight:700 } }, `Live: ${dateRange}`)
+            !rawRows && !usageRowsData && React.createElement("div", { style:{ fontSize:11, background:"#3a4a7c", color:"#fff", padding:"4px 12px", borderRadius:9999 } }, "Demo mode — upload CSV to load real data"),
+            (rawRows || usageRowsData) && React.createElement("div", { style:{ fontSize:11, background:COLOURS.accent, color:"#1a1a1a", padding:"4px 12px", borderRadius:9999, fontWeight:700 } },
+              usageRowsData ? `DB · ${activeperiodLabel || dateRangeFrom}` : `Live: ${dateRange}`
+            )
           )
         ),
         React.createElement("div", {
           style:{
-            background:"#fff", border:"1px solid #e2e8f0", borderRadius:8, padding:"14px 20px", marginBottom:24,
+            background:"#fff", border:"1px solid #e2e8f0", borderRadius:8, padding:"14px 20px", marginBottom: supabaseClient ? 8 : 24,
             borderLeft:`4px solid ${periodAccent}`, boxShadow:"0 1px 2px rgba(15,23,42,0.06)",
           }
         },
           React.createElement("div", { style:{ fontSize:11, fontWeight:700, color:COLOURS.advisory, textTransform:"uppercase", letterSpacing:1.2, marginBottom:6 } }, "Reporting period"),
-          React.createElement("div", { style:{ fontSize:16, fontWeight:700, color:COLOURS.bodyText, lineHeight:1.4 } }, reportingPeriod.line)
+          usageRowsLoading
+            ? React.createElement("div", { style:{ fontSize:13, color:"#9ca3af", fontStyle:"italic" } }, "Loading data…")
+            : React.createElement("div", { style:{ fontSize:16, fontWeight:700, color:COLOURS.bodyText, lineHeight:1.4 } },
+                (activeDateFrom && activeDateTo) ? activeperiodLabel : reportingPeriod.line
+              )
+        ),
+        supabaseClient && React.createElement("div", {
+          style:{
+            background:"#fff", border:"1px solid #e2e8f0", borderRadius:8, padding:"12px 20px", marginBottom:24,
+            boxShadow:"0 1px 2px rgba(15,23,42,0.06)", display:"flex", gap:12, alignItems:"center", flexWrap:"wrap",
+          }
+        },
+          React.createElement("span", { style:{ fontSize:11, fontWeight:700, color:COLOURS.advisory, textTransform:"uppercase", letterSpacing:1 } }, "Date range"),
+          availablePeriods.length > 0 && React.createElement("select", {
+            value: selectedPeriodId || "custom",
+            onChange: e => {
+              const p = availablePeriods.find(p => p.id === e.target.value);
+              if (p) {
+                setDateRangeFrom(p.date_from);
+                setDateRangeTo(p.date_to);
+                setSelectedPeriodId(p.id);
+              } else {
+                setSelectedPeriodId("custom");
+              }
+            },
+            style: { fontSize:12, borderRadius:6, border:"1px solid #d1d5db", padding:"5px 8px", color:COLOURS.bodyText },
+          },
+            React.createElement("option", { value: "custom" }, "Custom range"),
+            ...availablePeriods.map(p =>
+              React.createElement("option", { key: p.id, value: p.id }, p.label)
+            )
+          ),
+          React.createElement("input", {
+            type: "date",
+            value: dateRangeFrom || "",
+            onChange: e => { setDateRangeFrom(e.target.value); setSelectedPeriodId("custom"); },
+            style: { fontSize:12, borderRadius:6, border:"1px solid #d1d5db", padding:"5px 8px", color:COLOURS.bodyText },
+          }),
+          React.createElement("span", { style:{ color:"#94a3b8", fontSize:13 } }, "→"),
+          React.createElement("input", {
+            type: "date",
+            value: dateRangeTo || "",
+            onChange: e => { setDateRangeTo(e.target.value); setSelectedPeriodId("custom"); },
+            style: { fontSize:12, borderRadius:6, border:"1px solid #d1d5db", padding:"5px 8px", color:COLOURS.bodyText },
+          }),
+          dateRangeFrom && dateRangeTo && React.createElement("span", { style:{ fontSize:11, color:COLOURS.captionText } },
+            daysBetween(dateRangeFrom, dateRangeTo) + " days"
+          ),
+          (dateRangeFrom || dateRangeTo) && React.createElement("button", {
+            type: "button",
+            onClick: () => { setDateRangeFrom(null); setDateRangeTo(null); setSelectedPeriodId(null); setUsageRowsData(null); },
+            style: { fontSize:11, padding:"4px 10px", borderRadius:6, border:"1px solid #d1d5db", background:"#fff", color:"#64748b", cursor:"pointer" },
+          }, "Clear"),
+          periodsLoading && React.createElement("span", { style:{ fontSize:11, color:"#9ca3af" } }, "Loading periods…")
         ),
         React.createElement("div", { style:{ background:"#fff", border:"1px solid #e2e8f0", borderRadius:"8px 8px 0 0", overflow:"hidden", marginTop:4 } },
           React.createElement(TabBar, { activeTab, onSelect: setActiveTab })
@@ -2992,7 +3044,7 @@ Generated by Frank Group AI Governance Dashboard`);
               : React.createElement(PinGate, { onUnlock: () => setAdminUnlocked(true) })
           ),
           activeTab === "dashboard" && React.createElement(React.Fragment, null,
-            !rawRows && React.createElement("div", {
+            !rawRows && !usageRowsData && React.createElement("div", {
               style: {
                 background: "#f5f3ff", border: `1px solid ${COLOURS.advisory}`,
                 borderRadius: 8, padding: "16px 20px", margin: "20px 0 0",
@@ -3001,7 +3053,8 @@ Generated by Frank Group AI Governance Dashboard`);
             },
               "No data loaded yet. Go to the ",
               React.createElement("strong", null, "Admin"),
-              " tab to upload CSV files."
+              " tab to upload CSV files.",
+              supabaseClient && !dateRangeFrom && " Or select a date range above to load data from the database."
             ),
             React.createElement(Module2, { users, settings, metrics, hasBehaviorData: hasBehaviorDataForModules, trendSeries }),
             React.createElement(Module3, { users, metrics }),

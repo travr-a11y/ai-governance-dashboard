@@ -102,6 +102,44 @@ async function ingestUsageRows(
   console.log(`usage_rows: inserted ${insertRows.length} rows for upload ${uploadId}`);
 }
 
+// ─── Auto-register period from CSV filename ───────────────────────────────────
+
+function buildPeriodLabel(dateFrom: string, dateTo: string): string {
+  const from = new Date(dateFrom + "T00:00:00Z");
+  const to = new Date(dateTo + "T00:00:00Z");
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const fromMonth = months[from.getUTCMonth()];
+  const toMonth = months[to.getUTCMonth()];
+  const fromYear = from.getUTCFullYear();
+  const toYear = to.getUTCFullYear();
+  if (fromYear === toYear && from.getUTCMonth() === to.getUTCMonth()) {
+    const d1 = from.getUTCDate(), d2 = to.getUTCDate();
+    const totalDays = (to.getTime() - from.getTime()) / 86400000 + 1;
+    if (totalDays >= 28) return `${fromMonth} ${fromYear}`;
+    return `${fromMonth} ${d1}–${d2} ${fromYear}`;
+  }
+  if (fromYear === toYear) return `${fromMonth}–${toMonth} ${fromYear}`;
+  return `${fromMonth} ${fromYear}–${toMonth} ${toYear}`;
+}
+
+async function autoRegisterPeriod(
+  sb: ReturnType<typeof createClient>,
+  fileName: string,
+  startDateStr: string,
+): Promise<void> {
+  const endMatch = fileName.match(/\d{4}-\d{2}-\d{2}-to-(\d{4}-\d{2}-\d{2})/);
+  if (!endMatch) return;
+  const dateFrom = startDateStr;
+  const dateTo = endMatch[1];
+  const label = buildPeriodLabel(dateFrom, dateTo);
+  const { error } = await sb.from("periods").upsert(
+    { label, date_from: dateFrom, date_to: dateTo, is_auto: true },
+    { onConflict: "date_from,date_to", ignoreDuplicates: false },
+  );
+  if (error) console.error("autoRegisterPeriod error:", error);
+  else console.log(`Period auto-registered: ${label} (${dateFrom} → ${dateTo})`);
+}
+
 // ─── Chunker (unchanged) ──────────────────────────────────────────────────────
 
 function chunkText(text: string, fileType: string): string[] {
@@ -230,6 +268,9 @@ Deno.serve(async (req: Request) => {
     // ── Step 1: Parse Anthropic CSV into usage_rows (runs without OpenRouter key) ──
     if (row.file_type === "anthropic-csv") {
       await ingestUsageRows(sb, uploadId, row.file_name, text);
+      // Auto-register the period from filename dates (YYYY-MM-DD-to-YYYY-MM-DD)
+      const dateMatch = row.file_name.match(/(\d{4}-\d{2}-\d{2})-to-/);
+      if (dateMatch) await autoRegisterPeriod(sb, row.file_name, dateMatch[1]);
     }
 
     // ── Step 2: Chunk and embed (skipped if no OpenRouter key) ───────────────────

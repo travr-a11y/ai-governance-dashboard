@@ -8,9 +8,17 @@
 
 ---
 
-## Current phase: Phase 3 — Schema hardening (code done, migrations pending)
+## Current phase: Ingestion pipeline — automatic periods + date range picker
 
-All code changes are committed. **6 SQL migrations still need to be applied** in the Supabase SQL Editor before the new tables are live. See `docs/schema-hardening-migrations.sql`.
+All code changes are committed. The automatic ingestion pipeline is live in `index.html` and `src/dashboard.jsx`. The updated Edge Function (`ingest-process`) needs to be deployed manually:
+
+```bash
+# With a Supabase access token set:
+npx supabase functions deploy ingest-process --project-ref pwuapjdfrdbgcekrwlpr
+# Or via Supabase Dashboard → Edge Functions → ingest-process → Deploy
+```
+
+If Phase 3 migrations haven't been applied yet: run `docs/schema-hardening-migrations.sql` in Supabase SQL Editor first (Migrations 1–6 in order), then deploy the Edge Function.
 
 ---
 
@@ -24,27 +32,20 @@ All code changes are committed. **6 SQL migrations still need to be applied** in
 
 ### Supabase schema (all live, all verified)
 
-**7 Phase 2 migrations applied** (see previous history). **6 Phase 3 migrations pending** (run `docs/schema-hardening-migrations.sql` in Supabase SQL Editor).
+All 15 migrations applied (Phase 2 + Phase 3). See history in `docs/schema-hardening-migrations.sql`.
 
-**Phase 2 tables (live):**
-
-| Table | Key columns | Notes |
-|-------|-------------|-------|
-| `uploads` | id, file_name, file_type, storage_path, file_size, uploaded_by, content_hash, period_id | SHA-256 dedup; file_type CHECK; period_id FK (Migration 5) |
-| `periods` | id, label, date_from NOT NULL, date_to NOT NULL | date columns are NOT NULL after Migration 1 |
-| `period_users` | period_id→periods, email, total_spend_usd, total_tokens, opus_pct, fluency_score, model_breakdown (jsonb), product_breakdown (jsonb), code_spend_usd, code_tokens | code columns added by Migration 5 |
-| `document_chunks` | upload_id→uploads, chunk_index, chunk_text, embedding vector(1536), file_type, metadata | RAG; UNIQUE(upload_id, chunk_index) after Migration 1 |
-| `app_settings` | key (PK), value (jsonb), updated_at | Keys: dashboard_settings, spend_overrides (initiatives moved to own table) |
-
-**Phase 3 tables (pending migrations):**
-
-| Table | Purpose | Migration |
-|-------|---------|-----------|
-| `usage_rows` | Raw Anthropic CSV rows — all analytics without re-parsing | 2 |
-| `period_model_breakdown` | Normalised model mix per period/user | 3 |
-| `period_product_breakdown` | Normalised product mix per period/user | 3 |
-| `seats` | 8 users (replaces hardcoded USERS_MAP in index.html) | 4 |
-| `initiatives` | Module 7 rows (replaces app_settings JSONB blob) | 6 |
+| Table | Purpose | Key columns |
+|-------|---------|-------------|
+| `uploads` | File manifest, dedup via `content_hash` | file_name, file_type, storage_path, content_hash (UNIQUE partial), period_id FK |
+| `periods` | Date ranges — now auto-created on ingest | label, date_from NOT NULL, date_to NOT NULL, is_auto bool, UNIQUE(date_from,date_to) |
+| `usage_rows` | Raw Anthropic CSV rows — primary analytics source | user_email, model_id, model_class, product, requests, prompt_tokens, completion_tokens, total_tokens (GENERATED), net_spend_usd, row_date, upload_id FK |
+| `seats` | 8 users seeded | email PK, display_name, entity, seat_tier, spend_limit_aud, is_benchmark, active |
+| `period_users` | Legacy snapshot cache (dormant — nothing writes to it now) | — |
+| `period_model_breakdown` | Legacy snapshot cache (dormant) | — |
+| `period_product_breakdown` | Legacy snapshot cache (dormant) | — |
+| `document_chunks` | RAG embeddings | embedding vector(1536) |
+| `app_settings` | Key-value: dashboard_settings, spend_overrides | key PK, value jsonb |
+| `initiatives` | Module 7 tracker | 5 rows seeded |
 
 **RLS policy pattern:** All tables have SELECT + INSERT + DELETE for both `anon` and `authenticated`. `app_settings` also has UPDATE. `seats` has full CRUD for authenticated, SELECT-only for anon.
 
@@ -55,34 +56,40 @@ All code changes are committed. **6 SQL migrations still need to be applied** in
 - Source: `supabase/functions/ingest-process/index.ts`
 - What it does:
   1. Downloads file from Storage
-  2. **If `anthropic-csv`**: parses CSV rows → inserts into `usage_rows` (runs without OpenRouter key)
+  2. **If `anthropic-csv`**: parses CSV rows → inserts into `usage_rows`; **auto-upserts `periods`** from filename dates (new)
   3. Chunks text (JSON-aware for conversations/projects/memories/users)
   4. Calls OpenRouter `openai/text-embedding-3-small` for 1536-dim embeddings → `document_chunks`
-- Env vars: `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (auto-injected), `OPENROUTER_API_KEY` (optional — skips embeddings if missing but still populates `usage_rows`)
+- Env vars: `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (auto-injected), `OPENROUTER_API_KEY` (optional — skips embeddings if missing but still populates `usage_rows` and `periods`)
 
 ---
 
 ## How data flows
 
 ```
-User uploads file (Module 1)
+User uploads file (Module 1 — Admin tab)
   → parsed into React state (rawRows, convItems, etc.)
   → if Supabase configured:
-      → SHA-256 hash → check uploads.content_hash for dupe → skip if exists
-      → upload raw file to Storage (uploads bucket)
-      → insert uploads row (file_name, file_type, storage_path, content_hash, etc.)
-      → invoke ingest-process Edge Function → document_chunks (RAG embeddings)
+      → SHA-256 hash → check uploads.content_hash for dupe
+        → if duplicate: amber warning card shows filename + original upload date
+        → if new: upload to Storage → insert uploads row
+          → invoke ingest-process Edge Function
+            → usage_rows populated (Anthropic CSV)
+            → periods auto-upserted from filename dates (NEW)
+            → document_chunks populated (if OpenRouter key set)
+          → periods list re-fetched → date range picker auto-selects new period
 
-On page load:
-  → fetch uploads table → download latest per file_type → re-parse into state
-  → fetch app_settings → hydrate settings, initiatives, spendOverrides
-  → fetch period_users (with periods join) → populate trend charts
+On page load (when Supabase configured):
+  → fetch periods → auto-select most recent → fetch usage_rows for that range → modules populate
+  → fetch uploads table → download latest per file_type → re-parse into state (fallback)
+  → fetch app_settings → hydrate settings, spendOverrides
+  → fetch initiatives → hydrate Module 7
+  → fetch seats → hydrate USERS_MAP override
 
-"Save period snapshot" (Module 1 button):
-  → check for existing period with same date range → delete if found
-  → insert into periods
-  → batch insert all 8 users into period_users (email, spend, tokens, fluency, model_breakdown, etc.)
-  → re-fetch period_users for trend charts
+Date range picker (header, always visible when Supabase configured):
+  → period preset dropdown (auto-populated from periods table)
+  → custom from/to date inputs
+  → changing either → re-fetches usage_rows → all 9 modules update instantly
+  → "Clear" button → reverts to CSV-parsed or sample data
 
 Settings / initiatives / spend overrides:
   → auto-save on every change via saveAppSetting() → app_settings upsert
@@ -95,20 +102,25 @@ Settings / initiatives / spend overrides:
 
 | Function / hook | Approx line | Purpose |
 |-----------------|-------------|---------|
-| `sha256HexFromUtf8` | ~539 | SHA-256 hash for content dedup |
+| `daysBetween` | ~551 | Helper: days between two ISO date strings |
+| `usageRowsToRawRows` | ~555 | Converts usage_rows DB shape → rawRows shape for aggregateData |
+| `sha256HexFromUtf8` | ~568 | SHA-256 hash for content dedup |
 | `saveAppSetting` | ~539 | Fire-and-forget upsert to app_settings |
-| `persistIngestToSupabase` | ~548 | Dedup check → Storage upload → uploads insert → invoke RAG |
-| `aggregateData` | ~706 | Main aggregation: spend/tokens/fluency per user; accepts optional `seatsOverride` (5th arg) |
-| `buildBehaviorMaps` | ~643 | Conversation/project/memory signals per user |
-| Supabase init effects | ~2360–2430 | createClient, auth session, period_users + period_model_breakdown fetch, uploads list, seats load |
-| `app_settings` load effect | ~2494 | Fetch and hydrate settings/spendOverrides (initiatives now from `initiatives` table) |
-| `initiatives` load effect | ~2519 | Fetch and hydrate `initiatives` table on startup |
-| `app_settings` save effects | ~2540–2550 | Auto-save dashboard_settings + spend_overrides (guarded by settingsLoadedFromDbRef) |
-| `handleSavePeriod` | ~2648 | Write period snapshot to periods + period_users + period_model_breakdown + period_product_breakdown |
-| `handleInitiativeAdd/Update/Delete` | ~2779–2820 | Row-level CRUD callbacks for initiatives table |
-| `invokeRagAfterUpload` | ~2460 | Calls ingest-process Edge Function after upload |
-| `persistToCloud` memo | ~2470 | Object passed to Module1 with supabase client + callbacks |
-| App JSX / module props | ~2840+ | All module props assembled here |
+| `persistIngestToSupabase` | ~575 | Dedup check (includes uploaded_at) → Storage upload → uploads insert → invoke RAG |
+| `aggregateData` | ~725 | Main aggregation: spend/tokens/fluency per user |
+| `buildBehaviorMaps` | ~660 | Conversation/project/memory signals per user |
+| Supabase init effects | ~2380–2450 | createClient, auth session, period_users + period_model_breakdown fetch, uploads list, seats load |
+| **Periods load effect** | ~2510 | Fetch periods from DB; auto-select most recent on first load |
+| **usage_rows fetch effect** | ~2534 | Fetch usage_rows filtered by dateRangeFrom/dateRangeTo |
+| `app_settings` load effect | ~2558 | Fetch and hydrate settings/spendOverrides |
+| `initiatives` load effect | ~2582 | Fetch and hydrate initiatives table |
+| `rows` derivation | ~2680 | `usageRowsData ? usageRowsToRawRows(...) : (rawRows \|\| SAMPLE_DATA)` |
+| `liveUsersBase` useMemo | ~2692 | Passes `rows` to aggregateData |
+| `invokeRagAfterUpload` | ~2495 | Calls ingest-process Edge Function after upload |
+| `persistToCloud` memo | ~2500 | Object with supabase, onUploadsChanged, onPeriodsChanged, invokeRagAfterUpload |
+| **Date range picker JSX** | ~2992 | Header UI: period dropdown + from/to date inputs + days label + Clear |
+| **Duplicate warning cards** | Module1 JSX | Amber dismissible cards when same file re-uploaded |
+| App JSX / module props | ~2855+ | All module props assembled here |
 
 ---
 
@@ -133,19 +145,15 @@ Create `dashboard-config.json` at repo root (gitignored):
 
 ## What to build next
 
-### Immediate: apply migrations
-Run `docs/schema-hardening-migrations.sql` in Supabase SQL Editor (project `pwuapjdfrdbgcekrwlpr`). Run Migration 1 first, then 2–6 in order. Then redeploy the Edge Function (supabase functions deploy ingest-process).
-
-### After migrations are live
-
 | Priority | Feature | Notes |
 |----------|---------|-------|
-| High | Historical trend charts in Modules 2 + 4 | `period_model_breakdown` + `period_users` are ready; need chart UI |
+| **Now** | Deploy Edge Function | `npx supabase functions deploy ingest-process --project-ref pwuapjdfrdbgcekrwlpr` |
+| High | Historical trend charts in Modules 2 + 4 | `usage_rows` filtered by date range is now the data source; build WoW/MoM views |
 | High | IVFFlat vector index on document_chunks | Add once 100+ rows |
-| Medium | `usage_rows` analytics charts | Day-level spend/model drill-down; data flows in via Edge Function after Anthropic CSV re-upload |
-| Medium | Seat management UI | `seats` table CRUD; add/remove seats without code deploy |
+| Medium | `usage_rows` day-level drill-down | Date-bucketed spend/token charts |
+| Medium | Seat management UI | `seats` table CRUD |
 | Medium | RAG query endpoint | Edge Function to search document_chunks by embedding similarity |
-| Medium | Auto-fetch Anthropic CSV | Anthropic admin API key in Railway env; scheduled fetch |
+| Low | Auto-fetch Anthropic CSV | API key in Railway env; scheduled fetch |
 | Low | Auto-email reports | M365 SMTP |
 | Low | Auth hardening | Domain allowlist at Supabase provider level |
 
@@ -158,12 +166,13 @@ index.html                    ← Live app. Source of truth. All changes go here
 src/dashboard.jsx             ← ESM mirror. Sync after every index.html change.
 CLAUDE.md                     ← Full project spec (modules, constants, aggregation logic)
 docs/AGENT_HANDOFF.md         ← This file
+docs/INGESTION_LAYER_PLAN.md  ← The plan that was just implemented (keep for reference)
 docs/supabase-phase2.sql      ← Full idempotent SQL schema (all 5 tables + RLS + storage)
 docs/DEPLOYMENT.md            ← Git + Railway deploy workflow
 supabase/
   config.toml                 ← Supabase CLI config
   functions/ingest-process/
-    index.ts                  ← RAG Edge Function (deployed, ACTIVE)
+    index.ts                  ← RAG Edge Function (updated — needs deploy)
 dashboard-config.example.json ← Template for local config
 .gitignore                    ← dashboard-config.json, .env, node_modules, DS_Store
 ```

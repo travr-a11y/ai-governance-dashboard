@@ -2,7 +2,9 @@
 
 ## Project status
 
-**Phase 3: Schema hardening.** Code complete; 6 SQL migrations pending in Supabase SQL Editor. New tables: `usage_rows`, `period_model_breakdown`, `period_product_breakdown`, `seats`, `initiatives`. See `docs/schema-hardening-migrations.sql`. Phase 2 Supabase persistence remains fully operational.
+**Automatic ingestion pipeline live.** Upload a CSV → Edge Function parses rows into `usage_rows` → `periods` auto-registered from filename dates → dashboard date range picker immediately shows the new period → all modules query `usage_rows` for the selected range. No "Save period snapshot" button.
+
+Phase 3 schema migrations should be applied if not already done (see `docs/schema-hardening-migrations.sql`). Edge Function updated — deploy with: `npx supabase functions deploy ingest-process --project-ref pwuapjdfrdbgcekrwlpr`
 
 - GitHub: `https://github.com/travr-a11y/ai-governance-dashboard`
 - Railway: connect at railway.app → `travr-a11y/ai-governance-dashboard` (auto-deploys on push to main)
@@ -128,13 +130,21 @@ Regex buckets for Module 9 cross-team spotlight from **conversation titles only*
 
 ## Aggregation logic (`aggregateData`)
 
-1. Group Anthropic CSV rows by `user_email` (case-insensitive to `USERS_MAP` keys)
+**Data source priority** (resolved before calling `aggregateData`):
+1. `usageRowsData` (Supabase `usage_rows` filtered by date range) — preferred when Supabase configured + date range set
+2. `rawRows` (CSV parsed in browser) — fallback when no DB data
+3. `SAMPLE_DATA` — when neither is available
+
+`usageRowsToRawRows(dbRows)` converts DB row shape → rawRows shape so `aggregateData` remains unchanged.
+
+**`aggregateData` internals:**
+1. Group rows by `user_email` (case-insensitive to `USERS_MAP` keys)
 2. Sum spend, tokens, requests; build `modelBreakdown` / `productBreakdown`
 3. `opusPct`, `seatTier`, spend limits, `behavior: { conv, proj, mem }` per user
-4. **Fluency:** if `behavior.hasBehaviorData` (≥1 parsed conversation row with resolvable UUID→email), use multi-signal formula; else spend-only composite (same numeric blend as before)
+4. **Fluency:** if `behavior.hasBehaviorData` (≥1 parsed conversation row with resolvable UUID→email), use multi-signal formula; else spend-only composite
 5. Fill missing `USERS_MAP` users with zeros; sort by total tokens descending
 
-`buildBehaviorMaps(convItems, projItems, memItems, uuidMap, userMetaByEmail)` prepares per-email conversation/project/memory aggregates. `userMetaByEmail` comes from `users.json` (e.g. phone verified) for the config signal.
+`buildBehaviorMaps(convItems, projItems, memItems, uuidMap, userMetaByEmail)` prepares per-email conversation/project/memory aggregates. `userMetaByEmail` comes from `users.json` for the config signal.
 
 ---
 
@@ -175,27 +185,27 @@ git push origin main
 
 ---
 
-## Phase 2 roadmap (Supabase work)
+## Roadmap (Supabase work)
 
 | Status | Feature | Notes |
 |--------|---------|-------|
-| Done | Saved reporting periods | `periods`, `period_users` rows; header period selector |
-| Done | Raw file persistence | Storage bucket `uploads`; DB manifest `uploads`; ingest → upload + insert (background) |
-| Done | Auto-restore session | Latest row per `file_type` downloaded and parsed after sign-in |
+| Done | Raw file persistence | Storage bucket `uploads`; DB manifest `uploads`; ingest → upload + insert |
+| Done | Auto-restore session | Latest row per `file_type` downloaded and parsed on load |
 | Done | Module 1 history UI | List, refresh, load file, delete (Storage + row) |
-| Done | Content-hash dedup | SHA-256 `content_hash` column on `uploads`; unique partial index; skip re-upload of identical files |
-| Done | RAG document_chunks | `document_chunks` table with `vector(1536)` embeddings; `vector` extension enabled |
-| Done | ingest-process Edge Function | Chunks + embeds all file types; also parses Anthropic CSV → `usage_rows` (Phase 3) |
-| Done | Save period snapshots | `handleSavePeriod` writes to `periods` + `period_users` + `period_model_breakdown` + `period_product_breakdown`; Code spend/tokens included |
-| Done | Settings/initiatives persistence | `app_settings` for settings/spend_overrides; `initiatives` table for Module 7 (Phase 3) |
-| Done | Delete policies | Full CRUD on all tables |
-| Done (code) | `usage_rows` table | Raw CSV rows for SQL analytics; migrations pending |
-| Done (code) | `seats` table | Replaces hardcoded USERS_MAP; dashboard loads seats from DB with fallback |
-| Done (code) | `period_model_breakdown` / `period_product_breakdown` | Normalised breakdown rows for trend SQL |
-| Done (code) | `initiatives` table | Row-level CRUD replaces app_settings JSONB blob for Module 7 |
-| Planned | Historical trend charts | WoW / MoM charts using period_model_breakdown |
-| Planned | usage_rows analytics | Day-level drill-down charts |
-| Planned | Auto-fetch Anthropic | API key in env |
+| Done | Content-hash dedup | SHA-256 `content_hash`; skip re-upload of identical files; amber warning banner with original upload date |
+| Done | RAG document_chunks | `document_chunks` table with `vector(1536)` embeddings |
+| Done | `usage_rows` table | Raw Anthropic CSV rows; primary analytics source |
+| Done | `seats` table | Replaces hardcoded USERS_MAP; dashboard loads from DB with fallback |
+| Done | `initiatives` table | Row-level CRUD for Module 7 |
+| Done | Settings/initiatives persistence | `app_settings` for settings/spend_overrides |
+| Done | **Auto-register periods** | Edge Function auto-upserts `periods` from CSV filename dates on ingest |
+| Done | **Date range picker** | Header: period dropdown + custom from/to date inputs; drives all 9 modules |
+| Done | **usage_rows → modules** | `usageRowsData` state queries DB by date range; `usageRowsToRawRows` feeds `aggregateData` |
+| Done | **Remove save period button** | `handleSavePeriod` removed; periods created automatically on upload |
+| Needs deploy | Edge Function update | `npx supabase functions deploy ingest-process --project-ref pwuapjdfrdbgcekrwlpr` |
+| Planned | Historical trend charts | WoW / MoM charts from `usage_rows` grouped by period |
+| Planned | usage_rows day-level drill-down | Date-bucketed spend/model charts |
+| Planned | Auto-fetch Anthropic CSV | API key in Railway env; scheduled fetch |
 | Planned | Auto-email reports | M365 SMTP |
 | Planned | Auth hardening | Domain restriction at provider (hooks / allowlist) |
 
