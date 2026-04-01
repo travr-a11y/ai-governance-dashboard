@@ -1,4 +1,4 @@
-# Agent Handoff — Frank Group AI Governance Dashboard
+# Agent Handoff — The Frank Group AI Governance Dashboard
 
 **Purpose:** Read this + `CLAUDE.md` at the start of any new session. Between the two you have full context — no need to replay the conversation history.
 
@@ -140,6 +140,26 @@ Create `dashboard-config.json` at repo root (gitignored):
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `OPENROUTER_API_KEY` (for Module 8 report AI)
+
+---
+
+## UI redesign (latest change)
+
+All 9 UI changes from `docs/UI_REDESIGN_PLAN.md` are implemented in `index.html` and mirrored to `src/dashboard.jsx`:
+
+- `ROI_PRESETS` constant added after `USERS_MAP` (legal 40%, finance 35%, advisory 30% time savings benchmarks)
+- `roleType` field added to every `USERS_MAP` entry (email-keyed): trowley/andrea/rsharma/tbrcic → "advisory"; alex → "finance"; bagar/bwoodward/rlyons → "legal"
+- All module headings stripped of "Module X —" prefix; sub-headings added to each
+- ROI stat boxes in AI Adoption (est. hours recaptured, est. value delivered, avg per person)
+- Fluency scoring legend (collapsible) + tier band strip in AI Adoption
+- Haiku colour updated to `#2563eb` (true blue)
+- Max-width 1400px container, centred
+- Mobile responsive CSS + classNames on key grid containers
+- Australian date format (`en-AU`) on all date renders
+- Per-module demo mode amber banner (modules 2–9 only)
+- Cost Summary card in Data Ingestion (seat subscription + API usage + totals)
+- Seat (A$/mo) and Period Total columns added to Team Spend table; totals row added
+- Spend Notice banner in Team Spend for users ≥75% of monthly limit
 
 ---
 

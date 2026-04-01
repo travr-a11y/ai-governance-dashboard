@@ -10,19 +10,28 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
     // ─── Constants ───────────────────────────────────────────────────────────────
 
     const USERS_MAP = {
-      "trowley@frankadvisory.com.au": { name: "Travis Rowley", entity: "Frank Advisory", isBenchmark: true },
-      "alex@frankadvisory.com.au":    { name: "Alex", entity: "Frank Advisory" },
-      "andrea@frankadvisory.com.au":  { name: "Andrea", entity: "Frank Advisory" },
-      "rsharma@frankadvisory.com.au": { name: "Reginald", entity: "Frank Advisory" },
-      "tbrcic@franklaw.com.au":       { name: "Tamara", entity: "Frank Law" },
-      "bagar@franklaw.com.au":        { name: "Bahar", entity: "Frank Law" },
-      "bwoodward@franklaw.com.au":    { name: "Ben", entity: "Frank Law" },
-      "rlyons@franklaw.com.au":       { name: "Rhys", entity: "Frank Law" },
+      "trowley@frankadvisory.com.au": { name: "Travis Rowley", entity: "Frank Advisory", isBenchmark: true, roleType: "advisory" },
+      "alex@frankadvisory.com.au":    { name: "Alex", entity: "Frank Advisory", roleType: "finance" },
+      "andrea@frankadvisory.com.au":  { name: "Andrea", entity: "Frank Advisory", roleType: "advisory" },
+      "rsharma@frankadvisory.com.au": { name: "Reginald", entity: "Frank Advisory", roleType: "advisory" },
+      "tbrcic@franklaw.com.au":       { name: "Tamara", entity: "Frank Law", roleType: "advisory" },
+      "bagar@franklaw.com.au":        { name: "Bahar", entity: "Frank Law", roleType: "legal" },
+      "bwoodward@franklaw.com.au":    { name: "Ben", entity: "Frank Law", roleType: "legal" },
+      "rlyons@franklaw.com.au":       { name: "Rhys", entity: "Frank Law", roleType: "legal" },
     };
 
     const LOWER_EMAIL_TO_KEY = Object.fromEntries(
       Object.keys(USERS_MAP).map(k => [k.toLowerCase(), k])
     );
+
+    const ROI_PRESETS = {
+      legal:    { timeSavingPct: 0.40 },
+      finance:  { timeSavingPct: 0.35 },
+      advisory: { timeSavingPct: 0.30 },
+    };
+    const ROI_DEFAULT_SAVING_PCT = 0.30;
+    const ROI_MINS_PER_REQUEST   = 20;
+    const ROI_HOURLY_RATE_AUD    = 200;
 
     const SPEND_LIMITS = {
       "alex@frankadvisory.com.au":    null,
@@ -85,7 +94,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
     const COLOURS = {
       opus:           "#e74c3c",
       sonnet:         "#88aa00",
-      haiku:          "#3a4a7c",
+      haiku:          "#2563eb",
       advisory:       "#1e1645",
       law:            "#1e1645",
       accent:         "#88aa00",
@@ -902,7 +911,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
     }
 
     function Card({ children, style }) {
-      return React.createElement("div", { style:{ background:"#fff", border:"1px solid #e5e7eb", borderRadius:8, padding:20, ...style } }, children);
+      return React.createElement("div", { className:"section-card", style:{ background:"#fff", border:"1px solid #e5e7eb", borderRadius:8, padding:20, ...style } }, children);
     }
 
     function StatBox({ label, value, sub, colour }) {
@@ -1115,6 +1124,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
       persistToCloud,
       storedUploads,
       onPeriodsChanged,
+      userData,
+      codeData,
     }) {
       const [dragIngest, setDragIngest] = useState(false);
       const [error, setError] = useState(null);
@@ -1206,7 +1217,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
         : "Supabase not configured — uploads are session-only";
 
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 1 — Data Ingestion" }),
+        React.createElement(SectionHeader, { title:"Data Ingestion" }),
+        React.createElement("p", { style:{ margin:"2px 0 12px", fontSize:13, color:"#4a4a4a", fontWeight:400 } }, "Upload your team's Claude usage exports to populate the dashboard."),
         React.createElement("div", {
           style:{ display:"inline-flex", alignItems:"center", gap:6, padding:"4px 10px", borderRadius:9999, fontSize:11, fontWeight:600, marginBottom:10, ...cloudPillStyle }
         },
@@ -1226,7 +1238,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
               React.createElement("span", null,
                 React.createElement("strong", null, w.fileName),
                 " was already uploaded",
-                w.uploadedAt ? ` on ${new Date(w.uploadedAt).toLocaleString()}` : "",
+                w.uploadedAt ? ` on ${new Date(w.uploadedAt).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}` : "",
                 ". No action taken."
               ),
               React.createElement("button", {
@@ -1333,7 +1345,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
                         React.createElement("td", { style: { padding: "6px 8px", wordBreak: "break-all", maxWidth: 140 } }, row.file_name),
                         React.createElement("td", { style: { padding: "6px 8px", color: "#64748b" } }, row.file_type),
                         React.createElement("td", { style: { padding: "6px 8px", color: "#64748b", whiteSpace: "nowrap" } },
-                          row.uploaded_at ? new Date(row.uploaded_at).toLocaleString() : "—"),
+                          row.uploaded_at ? new Date(row.uploaded_at).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"),
                         React.createElement("td", { style: { padding: "6px 8px", color: "#15803d", fontWeight: 600 } }, "Stored")
                       )
                     ))
@@ -1341,7 +1353,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
                 )
               )
         ),
-        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:12, marginBottom:14 } },
+        React.createElement("div", { className:"m1-stats", style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:12, marginBottom:14 } },
           React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:6 } },
             React.createElement("label", { style:{ fontSize:12, color:COLOURS.bodyText, fontWeight:600 } }, "AUD/USD rate"),
             React.createElement("div", { style:{ display:"flex", gap:8, alignItems:"center" } },
@@ -1355,7 +1367,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
                 style:{ whiteSpace:"nowrap", padding:"6px 10px", borderRadius:6, border:`1px solid ${COLOURS.advisory}`, background: audLoading ? "#e5e7eb" : "#fff", color: COLOURS.advisory, cursor: audLoading ? "wait" : "pointer", fontSize:12, fontWeight:600 }
               }, audLoading ? "…" : "Refresh live")
             ),
-            audRateUpdated && React.createElement("div", { style:{ fontSize:10, color:"#9ca3af" } }, "Frankfurter: ", new Date(audRateUpdated).toLocaleString())
+            audRateUpdated && React.createElement("div", { style:{ fontSize:10, color:"#9ca3af" } }, "Frankfurter: ", new Date(audRateUpdated).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }))
           ),
           ...["Opus:Sonnet Ratio|opusSonnetRatio|0.5", "Total Seats|totalSeats|1"].map(cfg => {
             const [label, key, step] = cfg.split("|");
@@ -1369,6 +1381,48 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
             );
           })
         ),
+        (() => {
+          const apiSpendUSD = (userData || []).reduce((s, u) => s + (u.totalSpendUSD || 0), 0);
+          const apiSpendAUD = apiSpendUSD * (settings.audRate || 1);
+          const codeSpendAUD = codeData ? (codeData.spendUsd || 0) * (settings.audRate || 1) : 0;
+          const seatSubMonthly = BILLING_STANDARD_SEATS * 25 + BILLING_PREMIUM_SEATS * 125;
+          const totalPeriod = seatSubMonthly + apiSpendAUD + codeSpendAUD;
+          const annualised = (seatSubMonthly * 12) + ((apiSpendAUD + codeSpendAUD) * 12);
+          return React.createElement("div", {
+            style:{ background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:8, padding:"18px 22px", marginBottom:20, fontSize:13, lineHeight:2 }
+          },
+            React.createElement("div", { style:{ fontWeight:700, marginBottom:10, fontSize:14 } }, "Cost Summary"),
+            React.createElement("div", { style:{ display:"flex", justifyContent:"space-between" } },
+              React.createElement("span", null, "Claude.ai Seat Subscription (A$/mo)"),
+              React.createElement("span", { style:{ fontWeight:600 } }, `A$${seatSubMonthly}`)
+            ),
+            React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", paddingLeft:16, color:"#4a4a4a", fontSize:12 } },
+              React.createElement("span", null, `${BILLING_STANDARD_SEATS} Standard seats \u00d7 A$25`),
+              React.createElement("span", null, `A$${BILLING_STANDARD_SEATS * 25}`)
+            ),
+            React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", paddingLeft:16, color:"#4a4a4a", fontSize:12, marginBottom:6 } },
+              React.createElement("span", null, `${BILLING_PREMIUM_SEATS} Premium seat (Alex) \u00d7 A$125`),
+              React.createElement("span", null, `A$${BILLING_PREMIUM_SEATS * 125}`)
+            ),
+            React.createElement("div", { style:{ display:"flex", justifyContent:"space-between" } },
+              React.createElement("span", null, "API Usage this period"),
+              React.createElement("span", { style:{ fontWeight:600 } }, `A$${apiSpendAUD.toFixed(2)}`)
+            ),
+            codeSpendAUD > 0 && React.createElement("div", { style:{ display:"flex", justifyContent:"space-between" } },
+              React.createElement("span", null, "Claude Code this period"),
+              React.createElement("span", { style:{ fontWeight:600 } }, `A$${codeSpendAUD.toFixed(2)}`)
+            ),
+            React.createElement("hr", { style:{ border:"none", borderTop:"1px solid #e2e8f0", margin:"8px 0" } }),
+            React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", fontWeight:700 } },
+              React.createElement("span", null, "Total cost this period"),
+              React.createElement("span", null, `A$${totalPeriod.toFixed(2)}`)
+            ),
+            React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", color:"#4a4a4a", fontSize:12 } },
+              React.createElement("span", null, "Annualised run rate"),
+              React.createElement("span", null, `\u007eA$${Math.round(annualised).toLocaleString("en-AU")}/yr`)
+            )
+          );
+        })(),
         error && React.createElement("div", { style:{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6, padding:"10px 14px", fontSize:13, color:"#dc2626", marginBottom:12 } },
           React.createElement("strong", null, "Error: "), error
         ),
@@ -1382,20 +1436,46 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
     }
 
     // Module 2
-    function Module2({ users, settings, metrics, hasBehaviorData, trendSeries }) {
+    function Module2({ users, settings, metrics, hasBehaviorData, trendSeries, estHoursSaved, estValueAUD, activeUserCount, isSampleData }) {
+      const [showFluencyLegend, setShowFluencyLegend] = React.useState(false);
       const active = users.filter(u => u.totalRequests > 0);
       const advisory = users.filter(u => u.entity === "Frank Advisory");
       const law      = users.filter(u => u.entity === "Frank Law");
       const adoptionPct = (active.length / settings.totalSeats) * 100;
 
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 2 — AI Adoption (North Star)" }),
+        isSampleData && React.createElement("div", {
+          style:{ background:"#fffbeb", border:"1px solid #f59e0b", borderRadius:6, padding:"6px 12px", fontSize:12, color:"#92400e", marginBottom:12, display:"flex", alignItems:"center", gap:6 }
+        }, "\u26a0 Showing sample data \u2014 upload a CSV in Data Ingestion to see your team's real data"),
+        React.createElement(SectionHeader, { title:"AI Adoption" }),
+        React.createElement("p", { style:{ margin:"2px 0 12px", fontSize:13, color:"#4a4a4a", fontWeight:400 } }, "How actively the team is using AI tools and how proficient each person has become."),
+        React.createElement("div", { className:"roi-stats", style:{ display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:16, marginBottom:8 } },
+          React.createElement("div", { style:{ background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:8, padding:"14px 18px" } },
+            React.createElement("div", { style:{ fontSize:12, color:"#4a4a4a", marginBottom:4 } }, "Est. Time Recaptured"),
+            React.createElement("div", { style:{ fontSize:22, fontWeight:700, color:"#1e1645" } }, `${fmtDec(estHoursSaved, 1)} hrs this period`)
+          ),
+          React.createElement("div", { style:{ background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:8, padding:"14px 18px" } },
+            React.createElement("div", { style:{ fontSize:12, color:"#4a4a4a", marginBottom:4 } }, "Est. Value Delivered"),
+            React.createElement("div", { style:{ fontSize:22, fontWeight:700, color:"#1e1645" } }, fmtAUD(estValueAUD))
+          ),
+          React.createElement("div", { style:{ background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:8, padding:"14px 18px" } },
+            React.createElement("div", { style:{ fontSize:12, color:"#4a4a4a", marginBottom:4 } }, "Avg per Person"),
+            React.createElement("div", { style:{ fontSize:22, fontWeight:700, color:"#1e1645" } }, `${fmtDec(estHoursSaved / Math.max(1, activeUserCount), 1)} hrs`)
+          )
+        ),
+        React.createElement("p", {
+          style:{ fontSize:11, color:"#6b7280", fontStyle:"italic", marginTop:8, marginBottom:20 }
+        },
+          "Time estimate: requests \u00d7 20 min avg task \u00d7 role savings benchmark (Legal 40%, Finance 35%, Advisory 30%). " +
+          "Sources: McKinsey, Harvard Business School, BCG \u2014 conservative lower-bound estimates. " +
+          "Hourly rate: A$200. Adjust in Settings."
+        ),
         React.createElement("div", { style:{ background:"#f5f3ff", border:`1px solid ${COLOURS.advisory}`, borderRadius:6, padding:"8px 12px", marginBottom:14, fontSize:12, color:COLOURS.bodyText } },
           hasBehaviorData
             ? React.createElement("span", null, React.createElement("strong", null, "Fluency: "), "Multi-signal score (conversations 40%, spend 25%, projects 20%, config 15%).")
             : React.createElement("span", null, React.createElement("strong", null, "Fluency: "), "Spend-based estimate. Upload ", React.createElement("code", null, "conversations.json"), " for full behavioural score.")
         ),
-        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginBottom:20 } },
+        React.createElement("div", { className:"m2-stats", style:{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginBottom:20 } },
           React.createElement(StatBox, { label:"Org Adoption", value:`${fmtDec(adoptionPct,0)}%`, sub:`${active.length} of ${settings.totalSeats} seats used Claude this period`, colour:COLOURS.advisory }),
           React.createElement(StatBox, { label:"Frank Advisory", value:`${advisory.filter(u=>u.totalRequests>0).length} / ${advisory.length}`, sub:"used Claude this period", colour:COLOURS.advisory }),
           React.createElement(StatBox, { label:"Frank Law", value:`${law.filter(u=>u.totalRequests>0).length} / ${law.length}`, sub:"used Claude this period", colour:COLOURS.law }),
@@ -1406,6 +1486,52 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
           React.createElement("span", { style:{ color: metrics.org_opus_pct > 80 ? "#dc2626" : metrics.org_opus_pct > 50 ? "#f59e0b" : "#166534" } },
             `${fmtDec(100-metrics.org_opus_pct,0)}% non-Opus spend`),
           React.createElement("span", { style:{ color:"#9ca3af", marginLeft:8 } }, `(${fmtDec(metrics.org_opus_pct,0)}% Opus)`)
+        ),
+        React.createElement("div", { style:{ display:"flex", gap:16, flexWrap:"wrap", marginBottom:12, fontSize:12 } },
+          [
+            { tier:1, label:"\u2605 Super User", desc:"\u2265 70 pts", color:"#1e1645" },
+            { tier:2, label:"Active",            desc:"40\u201369 pts", color:"#88aa00" },
+            { tier:3, label:"Getting Started",   desc:"10\u201339 pts", color:"#f59e0b" },
+            { tier:4, label:"Not Yet Active",    desc:"< 10 pts",  color:"#9ca3af" },
+          ].map(t =>
+            React.createElement("span", { key:t.tier, style:{ display:"flex", alignItems:"center", gap:4 } },
+              React.createElement("span", { style:{ width:10, height:10, borderRadius:"50%", background:t.color, display:"inline-block" } }),
+              React.createElement("span", { style:{ color:"#1a1a1a" } }, t.label),
+              React.createElement("span", { style:{ color:"#9ca3af" } }, `(${t.desc})`)
+            )
+          )
+        ),
+        React.createElement("button", {
+          onClick: () => setShowFluencyLegend(v => !v),
+          style:{ background:"none", border:"none", padding:0, fontSize:12, color:"#2563eb", cursor:"pointer", marginBottom:12, textDecoration:"underline" }
+        }, "\u24d8 How is this score calculated?"),
+        showFluencyLegend && React.createElement("div", {
+          style:{ background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:8, padding:"16px 20px", marginTop:0, marginBottom:16, fontSize:13, lineHeight:1.7 }
+        },
+          React.createElement("p", { style:{ fontWeight:600, marginBottom:8, margin:"0 0 8px" } }, "Digital Fluency Score (0\u2013100)"),
+          React.createElement("p", { style:{ marginBottom:12, color:"#4a4a4a", margin:"0 0 12px" } }, "Each person receives a score based on how actively and broadly they\u2019re using AI tools."),
+          React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 } },
+            React.createElement("div", null,
+              React.createElement("p", { style:{ fontWeight:600, marginBottom:6, margin:"0 0 6px", fontSize:12, color:"#1e1645" } }, "When conversation export is uploaded"),
+              React.createElement("ul", { style:{ margin:0, paddingLeft:16, color:"#4a4a4a" } },
+                React.createElement("li", null, "Spend signal \u00d7 0.25"),
+                React.createElement("li", null, "Conversation depth \u00d7 0.40"),
+                React.createElement("li", null, "Project usage \u00d7 0.20"),
+                React.createElement("li", null, "Config / settings \u00d7 0.15")
+              )
+            ),
+            React.createElement("div", null,
+              React.createElement("p", { style:{ fontWeight:600, marginBottom:6, margin:"0 0 6px", fontSize:12, color:"#1e1645" } }, "Spend-only (no conversation export)"),
+              React.createElement("ul", { style:{ margin:0, paddingLeft:16, color:"#4a4a4a" } },
+                React.createElement("li", null, "Spend signal \u00d7 0.50"),
+                React.createElement("li", null, "Surface diversity \u00d7 0.30"),
+                React.createElement("li", null, "Recency \u00d7 0.20")
+              )
+            )
+          ),
+          React.createElement("p", { style:{ marginTop:12, color:"#4a4a4a", fontSize:12, margin:"12px 0 0" } },
+            "Tier bands: \u2605 Super User \u2265 70 \u2502 Active 40\u201369 \u2502 Getting Started 10\u201339 \u2502 Not Yet Active < 10"
+          )
         ),
         React.createElement("div", { style:{ fontSize:13, fontWeight:600, color:COLOURS.bodyText, marginBottom:8 } }, "Digital Fluency Tiers"),
         React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:8 } },
@@ -1443,7 +1569,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
     }
 
     // Module 3
-    function Module3({ users, metrics }) {
+    function Module3({ users, metrics, isSampleData }) {
       const [showRecs, setShowRecs] = useState(false);
       const pieData = [
         { name:"Opus",   value:metrics.org_opus_pct },
@@ -1453,8 +1579,12 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
       const flagged = users.filter(u => u.opusPct > 80 && u.totalRequests > 0);
 
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 3 — Model Governance" }),
-        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"220px 1fr", gap:24, marginBottom:12 } },
+        isSampleData && React.createElement("div", {
+          style:{ background:"#fffbeb", border:"1px solid #f59e0b", borderRadius:6, padding:"6px 12px", fontSize:12, color:"#92400e", marginBottom:12, display:"flex", alignItems:"center", gap:6 }
+        }, "\u26a0 Showing sample data \u2014 upload a CSV in Data Ingestion to see your team's real data"),
+        React.createElement(SectionHeader, { title:"Model Governance" }),
+        React.createElement("p", { style:{ margin:"2px 0 12px", fontSize:13, color:"#4a4a4a", fontWeight:400 } }, "Which AI models the team is using \u2014 and whether they're choosing the right tool for each job."),
+        React.createElement("div", { className:"m3-grid", style:{ display:"grid", gridTemplateColumns:"220px 1fr", gap:24, marginBottom:12 } },
           React.createElement("div", null,
             React.createElement("div", { style:{ fontSize:12, fontWeight:600, color:"#6b7280", marginBottom:8, textAlign:"center" } }, "Org-wide Model Split"),
             React.createElement(ResponsiveContainer, { width:"100%", height:180 },
@@ -1540,7 +1670,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
     }
 
     // Module 4
-    function Module4({ users, onUpdateLimit, audRate, readOnly, userSpendTrends }) {
+    function Module4({ users, onUpdateLimit, audRate, readOnly, userSpendTrends, isSampleData, dateRangeFrom, dateRangeTo }) {
       const [sortKey, setSortKey]   = useState("totalTokens");
       const [sortDir, setSortDir]   = useState("desc");
       const [expanded, setExpanded] = useState({});
@@ -1571,13 +1701,29 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
         }
       }, tier === "Premium" ? "Premium" : "Standard");
 
+      const periodDays = (dateRangeFrom && dateRangeTo)
+        ? Math.round((new Date(dateRangeTo) - new Date(dateRangeFrom)) / 86400000) + 1
+        : null;
+      const atRisk = users.filter(u => u.spendLimit && (u.totalSpendAUD / u.spendLimit) >= 0.75);
+
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 4 — User Spend & Token Breakdown" }),
+        isSampleData && React.createElement("div", {
+          style:{ background:"#fffbeb", border:"1px solid #f59e0b", borderRadius:6, padding:"6px 12px", fontSize:12, color:"#92400e", marginBottom:12, display:"flex", alignItems:"center", gap:6 }
+        }, "\u26a0 Showing sample data \u2014 upload a CSV in Data Ingestion to see your team's real data"),
+        React.createElement(SectionHeader, { title:"Team Spend & Usage" }),
+        React.createElement("p", { style:{ margin:"2px 0 12px", fontSize:13, color:"#4a4a4a", fontWeight:400 } }, "A full breakdown of what each person has spent, including their seat subscription and any additional usage."),
+        atRisk.length > 0 && React.createElement("div", {
+          style:{ background:"#fffbeb", border:"1px solid #d97706", borderRadius:8, padding:"10px 16px", marginBottom:16, fontSize:13 }
+        },
+          React.createElement("strong", null, "Spend Notice \u2014 "),
+          `${atRisk.length} team member${atRisk.length > 1 ? "s are" : " is"} approaching their monthly limit: `,
+          atRisk.map(u => `${u.name} (${Math.round((u.totalSpendAUD / u.spendLimit) * 100)}%)`).join(", ")
+        ),
         React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:10 } },
           React.createElement("strong", { style:{ color:COLOURS.advisory } }, "Claude Code: "),
           "API or legacy CSV spend is merged into the Travis Rowley row below (totals and Module 2). Workspace-level Code API exports have no per-user column; that usage is attributed to the benchmark seat. Claude Code remains separate from plan seat billing."
         ),
-        React.createElement("div", { style:{ overflowX:"auto" } },
+        React.createElement("div", { className:"m4-table-wrap", style:{ overflowX:"auto" } },
           React.createElement("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:12 } },
             React.createElement("thead", null,
               React.createElement("tr", { style:{ background:"#f3f4f6", borderBottom:"2px solid #e5e7eb" } },
@@ -1586,6 +1732,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
                   style:{ textAlign:"left", padding:"6px 10px", cursor: c.key==="seatTier" ? "default" : "pointer", userSelect:"none", whiteSpace:"nowrap", color:sortKey===c.key?COLOURS.advisory:"#6b7280", fontWeight:600 }
                 }, c.label, " ", c.key!=="seatTier" && sortKey===c.key?(sortDir==="asc"?"↑":"↓"):"")),
                 userSpendTrends && React.createElement("th", { style:{ padding:"6px 10px", color:"#6b7280", fontWeight:600, whiteSpace:"nowrap" } }, "Spend trend"),
+                React.createElement("th", { style:{ padding:"6px 10px", color:"#6b7280", fontWeight:600, whiteSpace:"nowrap" } }, "Seat (A$/mo)"),
+                React.createElement("th", { style:{ padding:"6px 10px", color:"#6b7280", fontWeight:600, whiteSpace:"nowrap" } }, "Period Total"),
                 React.createElement("th", { style:{ padding:"6px 10px", color:"#6b7280", fontWeight:600 } }, "Limit (AUD)"),
                 React.createElement("th", { style:{ padding:"6px 10px", color:"#6b7280", fontWeight:600 } }, "Util%"),
                 React.createElement("th", null)
@@ -1616,6 +1764,16 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
                     userSpendTrends && React.createElement("td", { style:{ padding:"6px 6px", verticalAlign:"middle" } },
                       React.createElement(MiniSpendSpark, { series: userSpendTrends[u.email] })
                     ),
+                    (() => {
+                      const seatCostMonthly = u.seatTier === "Premium" ? 125 : 25;
+                      const seatCostProrated = periodDays ? (seatCostMonthly / 30) * periodDays : seatCostMonthly;
+                      const seatLabel = periodDays ? `A$${seatCostProrated.toFixed(2)}` : `~A$${seatCostMonthly}`;
+                      const periodTotal = seatCostProrated + (u.totalSpendAUD || 0);
+                      return [
+                        React.createElement("td", { key:"seat-cost", style:{ padding:"6px 10px" } }, seatLabel),
+                        React.createElement("td", { key:"period-total", style:{ padding:"6px 10px", fontWeight:600 } }, `A$${periodTotal.toFixed(2)}`),
+                      ];
+                    })(),
                     React.createElement("td", { style:{ padding:"6px 10px" } },
                       readOnly
                         ? React.createElement("span", { style:{ fontSize:11, color:"#6b7280" } }, u.spendLimit != null ? fmtAUD(u.spendLimit) : "—")
@@ -1636,7 +1794,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
                   )
                 ];
                 if (isExpanded) {
-                  const colspan = userSpendTrends ? 14 : 13;
+                  const colspan = userSpendTrends ? 16 : 15;
                   rows.push(React.createElement("tr", { key:`${u.email}-exp`, style:{ borderBottom:"1px solid #f3f4f6" } },
                     React.createElement("td", { colSpan:colspan, style:{ padding:"12px 20px", background:"#f8fafc" } },
                       React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16 } },
@@ -1677,7 +1835,25 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
                   ));
                 }
                 return rows;
-              })
+              }),
+              React.createElement("tr", { style:{ borderTop:"2px solid #e2e8f0", fontWeight:700, background:"#f8fafc" } },
+                React.createElement("td", { style:{ padding:"6px 10px" } }, "Total"),
+                React.createElement("td", null),
+                React.createElement("td", null),
+                React.createElement("td", null),
+                React.createElement("td", { style:{ padding:"6px 10px" } }, fmtAUD(sorted.reduce((s,u)=>s+(u.totalSpendAUD||0),0))),
+                React.createElement("td", { style:{ padding:"6px 10px" } }, fmtUSD(sorted.reduce((s,u)=>s+(u.totalSpendUSD||0),0))),
+                React.createElement("td", { style:{ padding:"6px 10px" } }, fmtTokens(sorted.reduce((s,u)=>s+(u.totalTokens||0),0))),
+                React.createElement("td", { style:{ padding:"6px 10px" } }, fmt(sorted.reduce((s,u)=>s+(u.totalRequests||0),0))),
+                React.createElement("td", null),
+                React.createElement("td", null),
+                userSpendTrends && React.createElement("td", null),
+                React.createElement("td", { style:{ padding:"6px 10px" } }, `A$${sorted.reduce((s,u)=>s+(u.seatTier==="Premium"?125:25),0)}`),
+                React.createElement("td", { style:{ padding:"6px 10px" } }, `A$${sorted.reduce((s,u)=>s+(u.seatTier==="Premium"?125:25)/30*(periodDays||30)+(u.totalSpendAUD||0),0).toFixed(2)}`),
+                React.createElement("td", null),
+                React.createElement("td", null),
+                React.createElement("td", null)
+              )
             )
           )
         )
@@ -1685,7 +1861,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
     }
 
     // Module 5
-    function Module5({ users }) {
+    function Module5({ users, isSampleData }) {
       const products = ["Cowork","Chat","Sheet Agent","Research","Claude Code"];
       const surfaceData = products.map(p => {
         let totalSpend = 0, opusSpend = 0;
@@ -1702,7 +1878,11 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
       const highLeverage = surfaceData.filter(d => d.opusPct > 80 && d.spend > 20);
 
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 5 — Product / Surface Analysis" }),
+        isSampleData && React.createElement("div", {
+          style:{ background:"#fffbeb", border:"1px solid #f59e0b", borderRadius:6, padding:"6px 12px", fontSize:12, color:"#92400e", marginBottom:12, display:"flex", alignItems:"center", gap:6 }
+        }, "\u26a0 Showing sample data \u2014 upload a CSV in Data Ingestion to see your team's real data"),
+        React.createElement(SectionHeader, { title:"Usage by Surface" }),
+        React.createElement("p", { style:{ margin:"2px 0 12px", fontSize:13, color:"#4a4a4a", fontWeight:400 } }, "Which Claude products the team is using most \u2014 Chat, Code, Research, and more."),
         React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 280px", gap:24 } },
           React.createElement("div", null,
             React.createElement(ResponsiveContainer, { width:"100%", height:220 },
@@ -1744,7 +1924,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
     }
 
     // Module 6
-    function Module6({ users, settings, dateRange }) {
+    function Module6({ users, settings, dateRange, isSampleData }) {
       const [migrationPct, setMigrationPct] = useState(50);
       const opusSpendUSD  = users.reduce((s,u) => s+(u.modelBreakdown?.Opus?.spend||0), 0);
       const totalSpendUSD = users.reduce((s,u) => s+u.totalSpendUSD, 0);
@@ -1763,7 +1943,11 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
       const annualTotal  = (totalSpendUSD/months)*12;
 
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 6 — Savings Opportunity Calculator" }),
+        isSampleData && React.createElement("div", {
+          style:{ background:"#fffbeb", border:"1px solid #f59e0b", borderRadius:6, padding:"6px 12px", fontSize:12, color:"#92400e", marginBottom:12, display:"flex", alignItems:"center", gap:6 }
+        }, "\u26a0 Showing sample data \u2014 upload a CSV in Data Ingestion to see your team's real data"),
+        React.createElement(SectionHeader, { title:"Cost Optimisation" }),
+        React.createElement("p", { style:{ margin:"2px 0 12px", fontSize:13, color:"#4a4a4a", fontWeight:400 } }, "How much the firm could save by using more efficient AI models for routine tasks."),
         React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24 } },
           React.createElement("div", null,
             React.createElement("div", { style:{ fontSize:13, color:"#374151", marginBottom:8 } },
@@ -1912,7 +2096,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;color:#1a1a1a;margin:0;padding:24px
     }
 
     // Module 7 — AI Committee Initiative Tracker
-    function Module7InitiativeTracker({ initiatives, onAddInitiative, onUpdateInitiative, onDeleteInitiative, metrics, readOnly }) {
+    function Module7InitiativeTracker({ initiatives, onAddInitiative, onUpdateInitiative, onDeleteInitiative, metrics, readOnly, isSampleData }) {
       const [editId, setEditId]   = useState(null);
       const [form, setForm]       = useState({});
       const metricKeys = ["active_users_count","org_adoption_pct","frank_law_adoption_pct","org_opus_pct","total_tokens","avg_fluency_score"];
@@ -1939,7 +2123,11 @@ body{font-family:'Segoe UI',Arial,sans-serif;color:#1a1a1a;margin:0;padding:24px
       const exportJSON= () => { const b=new Blob([JSON.stringify(initiatives,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="initiatives.json"; a.click(); };
 
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 7 — AI Committee Initiative Tracker" }),
+        isSampleData && React.createElement("div", {
+          style:{ background:"#fffbeb", border:"1px solid #f59e0b", borderRadius:6, padding:"6px 12px", fontSize:12, color:"#92400e", marginBottom:12, display:"flex", alignItems:"center", gap:6 }
+        }, "\u26a0 Showing sample data \u2014 upload a CSV in Data Ingestion to see your team's real data"),
+        React.createElement(SectionHeader, { title:"Initiative Tracker" }),
+        React.createElement("p", { style:{ margin:"2px 0 12px", fontSize:13, color:"#4a4a4a", fontWeight:400 } }, "Progress against the AI Committee's key goals for this quarter."),
         readOnly && React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:10, padding:"8px 10px", background:"#f8fafc", borderRadius:6 } },
           "Viewing a saved period — initiative edits are disabled."),
         React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:10, marginBottom:12 } },
@@ -1988,7 +2176,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;color:#1a1a1a;margin:0;padding:24px
     }
 
     // Module 8 — Report Generator
-    function Module8ReportGenerator({ users, metrics, initiatives, settings, dateRange, hasBehaviorData, runtimeCfg }) {
+    function Module8ReportGenerator({ users, metrics, initiatives, settings, dateRange, hasBehaviorData, runtimeCfg, isSampleData }) {
       const [report, setReport] = useState("");
       const [copied, setCopied] = useState(false);
       const [aiLoading, setAiLoading] = useState(false);
@@ -2203,7 +2391,11 @@ Generated by Frank Group AI Governance Dashboard`);
       };
 
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 8 — Report Generator" }),
+        isSampleData && React.createElement("div", {
+          style:{ background:"#fffbeb", border:"1px solid #f59e0b", borderRadius:6, padding:"6px 12px", fontSize:12, color:"#92400e", marginBottom:12, display:"flex", alignItems:"center", gap:6 }
+        }, "\u26a0 Showing sample data \u2014 upload a CSV in Data Ingestion to see your team's real data"),
+        React.createElement(SectionHeader, { title:"Generate Report" }),
+        React.createElement("p", { style:{ margin:"2px 0 12px", fontSize:13, color:"#4a4a4a", fontWeight:400 } }, "Create a formatted governance report to share with leadership or the board."),
         React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:12, lineHeight:1.5 } },
           "Generate an AI narrative from aggregated dashboard metrics via OpenRouter (Gemini 2.5 Pro) — metrics only, no conversation bodies. ",
           "Or use the template button without a key. Then copy, download Word-compatible .doc, plain .txt, or Print / Save as PDF. ",
@@ -2294,7 +2486,7 @@ Generated by Frank Group AI Governance Dashboard`);
     }
 
     // Module 9 — Coaching & leaderboard
-    function Module9Coaching({ users, metrics, hasBehaviorData }) {
+    function Module9Coaching({ users, metrics, hasBehaviorData, isSampleData }) {
       const ranked = [...users].sort((a, b) => b.fluencyScore - a.fluencyScore);
       const seatTotal = Object.keys(USERS_MAP).length;
       const activeSeats = users.filter(u => u.totalRequests > 0).length;
@@ -2303,7 +2495,11 @@ Generated by Frank Group AI Governance Dashboard`);
       const spots = spotlightCategories(users);
 
       return React.createElement(Card, null,
-        React.createElement(SectionHeader, { title:"Module 9 — Coaching & Fluency Leaderboard" }),
+        isSampleData && React.createElement("div", {
+          style:{ background:"#fffbeb", border:"1px solid #f59e0b", borderRadius:6, padding:"6px 12px", fontSize:12, color:"#92400e", marginBottom:12, display:"flex", alignItems:"center", gap:6 }
+        }, "\u26a0 Showing sample data \u2014 upload a CSV in Data Ingestion to see your team's real data"),
+        React.createElement(SectionHeader, { title:"Coaching & Leaderboard" }),
+        React.createElement("p", { style:{ margin:"2px 0 12px", fontSize:13, color:"#4a4a4a", fontWeight:400 } }, "A ranked view of AI proficiency across the team, with personalised next steps for each person."),
         React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:14 } },
           "Rule-based coaching from usage metadata and conversation titles only — no message content is loaded or displayed."
         ),
@@ -2636,6 +2832,8 @@ Generated by Frank Group AI Governance Dashboard`);
         [usageRowsData, rawRows]
       );
 
+      const isSampleData = !rawRows && !usageRowsData;
+
       const liveUsersBase = useMemo(() => {
         const agg = aggregateData(rows, settings.audRate, behavior, codeData, seatsFromDb);
         return agg.map(u => {
@@ -2648,6 +2846,13 @@ Generated by Frank Group AI Governance Dashboard`);
       }, [rows, settings.audRate, spendOverrides, behavior, codeData]);
 
       const users = liveUsersBase;
+
+      const estHoursSaved = users.reduce((acc, u) => {
+        const preset = ROI_PRESETS[USERS_MAP[u.email]?.roleType] || { timeSavingPct: ROI_DEFAULT_SAVING_PCT };
+        return acc + (u.totalRequests * ROI_MINS_PER_REQUEST * preset.timeSavingPct / 60);
+      }, 0);
+      const estValueAUD    = estHoursSaved * ROI_HOURLY_RATE_AUD;
+      const activeUserCount = users.filter(u => u.totalRequests > 0).length;
 
       const trendGroups = useMemo(() => groupPeriodUsersRows(trendFlatRows), [trendFlatRows]);
       const trendSeries = useMemo(
@@ -2782,7 +2987,7 @@ Generated by Frank Group AI Governance Dashboard`);
 
       const periodAccent = (activeDateFrom && activeDateTo) ? COLOURS.accent
         : reportingPeriod.tone === "live" ? COLOURS.accent
-        : reportingPeriod.tone === "demo" ? "#3a4a7c" : "#94a3b8";
+        : reportingPeriod.tone === "demo" ? "#2563eb" : "#94a3b8";
       const reportDateRange = activeDateFrom && activeDateTo
         ? `${activeDateFrom} to ${activeDateTo}`
         : dateRange;
@@ -2892,6 +3097,8 @@ Generated by Frank Group AI Governance Dashboard`);
         persistToCloud,
         storedUploads: storedUploadsForModule,
         onPeriodsChanged: bumpPeriodsRefresh,
+        userData: users,
+        codeData,
       }), [
         handleData,
         updateSettings,
@@ -2918,17 +3125,18 @@ Generated by Frank Group AI Governance Dashboard`);
         persistToCloud,
         storedUploadsForModule,
         bumpPeriodsRefresh,
+        users,
       ]);
 
-      return React.createElement("div", { style:{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", background:"#f1f5f9", minHeight:"100vh", padding:24, color:COLOURS.bodyText } },
-        React.createElement("div", { style:{ background:COLOURS.advisory, color:"#fff", borderRadius:10, padding:"20px 28px", marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12, borderLeft:`6px solid ${COLOURS.accent}` } },
+      return React.createElement("div", { style:{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", background:"#f1f5f9", minHeight:"100vh", padding:"0 16px", maxWidth:1400, margin:"0 auto", color:COLOURS.bodyText } },
+        React.createElement("div", { style:{ background:COLOURS.advisory, color:"#fff", borderRadius:10, padding:"20px 28px", marginBottom:16, marginTop:24, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12, borderLeft:`6px solid ${COLOURS.accent}` } },
           React.createElement("div", null,
             React.createElement("div", { style:{ fontSize:12, fontWeight:700, color:COLOURS.accent, letterSpacing:2, textTransform:"uppercase" } }, "The Frank Group"),
-            React.createElement("div", { style:{ fontSize:22, fontWeight:800, letterSpacing:0.3 } }, "AI Governance Dashboard"),
+            React.createElement("div", { className:"dash-title", style:{ fontSize:22, fontWeight:800, letterSpacing:0.3 } }, "AI Governance Dashboard"),
             React.createElement("div", { style:{ fontSize:13, opacity:0.9, marginTop:4 } }, "Frank Advisory · Frank Law · Phase 2 preview")
           ),
           React.createElement("div", { style:{ textAlign:"right" } },
-            !rawRows && !usageRowsData && React.createElement("div", { style:{ fontSize:11, background:"#3a4a7c", color:"#fff", padding:"4px 12px", borderRadius:9999 } }, "Demo mode — upload CSV to load real data"),
+            !rawRows && !usageRowsData && React.createElement("div", { style:{ fontSize:11, background:"#2563eb", color:"#fff", padding:"4px 12px", borderRadius:9999 } }, "Demo mode — upload CSV to load real data"),
             (rawRows || usageRowsData) && React.createElement("div", { style:{ fontSize:11, background:COLOURS.accent, color:"#1a1a1a", padding:"4px 12px", borderRadius:9999, fontWeight:700 } },
               usageRowsData ? `DB · ${activeperiodLabel || dateRangeFrom}` : `Live: ${dateRange}`
             )
@@ -2948,6 +3156,7 @@ Generated by Frank Group AI Governance Dashboard`);
               )
         ),
         supabaseClient && React.createElement("div", {
+          className:"date-range-row",
           style:{
             background:"#fff", border:"1px solid #e2e8f0", borderRadius:8, padding:"12px 20px", marginBottom:24,
             boxShadow:"0 1px 2px rgba(15,23,42,0.06)", display:"flex", gap:12, alignItems:"center", flexWrap:"wrap",
@@ -3018,17 +3227,17 @@ Generated by Frank Group AI Governance Dashboard`);
               " tab to upload CSV files.",
               supabaseClient && !dateRangeFrom && " Or select a date range above to load data from the database."
             ),
-            React.createElement(Module2, { users, settings, metrics, hasBehaviorData: hasBehaviorDataForModules, trendSeries }),
-            React.createElement(Module3, { users, metrics }),
-            React.createElement(Module4, { users, onUpdateLimit:updateLimit, audRate: settings.audRate, readOnly: false, userSpendTrends }),
-            React.createElement(Module5, { users }),
-            React.createElement(Module7InitiativeTracker, { initiatives, onAddInitiative: handleInitiativeAdd, onUpdateInitiative: handleInitiativeUpdate, onDeleteInitiative: handleInitiativeDelete, metrics, readOnly: false }),
-            React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange: reportDateRange, hasBehaviorData: hasBehaviorDataForModules, runtimeCfg }),
-            React.createElement(Module9Coaching, { users, metrics, hasBehaviorData: hasBehaviorDataForModules }),
-            React.createElement(Module6, { users, settings, dateRange: reportDateRange })
+            React.createElement(Module2, { users, settings, metrics, hasBehaviorData: hasBehaviorDataForModules, trendSeries, estHoursSaved, estValueAUD, activeUserCount, isSampleData }),
+            React.createElement(Module3, { users, metrics, isSampleData }),
+            React.createElement(Module4, { users, onUpdateLimit:updateLimit, audRate: settings.audRate, readOnly: false, userSpendTrends, isSampleData, dateRangeFrom, dateRangeTo }),
+            React.createElement(Module5, { users, isSampleData }),
+            React.createElement(Module7InitiativeTracker, { initiatives, onAddInitiative: handleInitiativeAdd, onUpdateInitiative: handleInitiativeUpdate, onDeleteInitiative: handleInitiativeDelete, metrics, readOnly: false, isSampleData }),
+            React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange: reportDateRange, hasBehaviorData: hasBehaviorDataForModules, runtimeCfg, isSampleData }),
+            React.createElement(Module9Coaching, { users, metrics, hasBehaviorData: hasBehaviorDataForModules, isSampleData }),
+            React.createElement(Module6, { users, settings, dateRange: reportDateRange, isSampleData })
           )
         ),
-        React.createElement("div", { style:{ textAlign:"center", color:"#9ca3af", fontSize:11, marginTop:24, paddingBottom:12 } }, "Frank Group AI Governance Dashboard · Phase 2 · Optional Supabase persistence; Module 8 optional AI narrative uses OpenRouter (paste, or key from Railway / dashboard-config.json; aggregated metrics only); all other processing is client-side")
+        React.createElement("div", { style:{ textAlign:"center", color:"#9ca3af", fontSize:11, marginTop:24, paddingBottom:12 } }, "The Frank Group AI Governance Dashboard · Phase 2 · Optional Supabase persistence; Generate Report optional AI narrative uses OpenRouter (paste, or key from Railway / dashboard-config.json; aggregated metrics only); all other processing is client-side")
       );
     }
 
