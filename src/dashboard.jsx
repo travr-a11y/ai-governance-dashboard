@@ -1,3 +1,8 @@
+/**
+ * Dev/reference copy of the inline app in `index.html` — keep in sync when editing the dashboard.
+ * Production uses CDN scripts in `index.html` in this order: React → ReactDOM → Babel → **PropTypes** → Recharts
+ * (Recharts UMD requires PropTypes). See `docs/DEPLOYMENT.md` post-deploy smoke check.
+ */
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis,

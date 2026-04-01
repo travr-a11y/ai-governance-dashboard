@@ -129,6 +129,20 @@ git push origin main
 [Verify: visit public URL, upload sample CSV, confirm dashboard loads]
 ```
 
+### Post-deploy smoke check (browser)
+
+Railway health checks only prove `GET /` returns **200** — they do not catch client-side JS failures (e.g. blank white page).
+
+After each deploy:
+
+1. Open the **public URL** from Railway → **Settings → Domains** (hard refresh to avoid stale cached HTML).
+2. Confirm the dashboard **renders** (header, tabs, charts), not a blank page.
+3. Open **DevTools → Console** and confirm there are **no** runtime errors such as:
+   - `Cannot read properties of undefined (reading 'oneOfType')` (from Recharts)
+   - `Recharts is not defined`
+4. If those appear, **`index.html` must load `prop-types` before Recharts** — Recharts UMD expects a global `PropTypes`.
+5. If you see the on-page **“Dashboard failed to load”** banner instead, check **Network** for blocked CDN scripts (`unpkg.com`).
+
 ---
 
 ## 6. Monitoring
