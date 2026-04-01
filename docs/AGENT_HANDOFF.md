@@ -143,6 +143,10 @@ Create `dashboard-config.json` at repo root (gitignored):
 
 ---
 
+## Recent changes
+
+- **UI Iteration 2 Part A (2026-04-02):** Presentation layer — "Frank Capital" sub-title, demo pill removed, A$ commas + Log a Win button, Model Efficiency removed from Module 2, "How calculated?" moved below tier cards, first names globally, brand-palette bar colors in Module 5, Coaching before Report Generator, OpenRouter paste input removed, new tier-based nudge copy.
+
 ## UI redesign (latest change)
 
 All 9 UI changes from `docs/UI_REDESIGN_PLAN.md` are implemented in `index.html` and mirrored to `src/dashboard.jsx`:

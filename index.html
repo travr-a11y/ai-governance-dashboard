@@ -157,6 +157,8 @@
       premiumBadge:   "#d97706",
     };
 
+    const SURFACE_PALETTE = ["#1e1645", "#88aa00", "#f59e0b", "#3b82f6", "#6366f1", "#0ea5e9"];
+
     const SEAT_COSTS_AUD = { Standard: 25, Premium: 125 };
 
     const SEAT_TIERS = {
@@ -1506,19 +1508,23 @@
           ),
           React.createElement("div", { style:{ background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:8, padding:"14px 18px" } },
             React.createElement("div", { style:{ fontSize:12, color:"#4a4a4a", marginBottom:4 } }, "Est. Value Delivered"),
-            React.createElement("div", { style:{ fontSize:22, fontWeight:700, color:"#1e1645" } }, fmtAUD(estValueAUD))
+            React.createElement("div", { style:{ fontSize:22, fontWeight:700, color:"#1e1645" } }, `A$${(estValueAUD||0).toLocaleString('en-AU', {minimumFractionDigits:2, maximumFractionDigits:2})}`)
           ),
           React.createElement("div", { style:{ background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:8, padding:"14px 18px" } },
             React.createElement("div", { style:{ fontSize:12, color:"#4a4a4a", marginBottom:4 } }, "Avg per Person"),
             React.createElement("div", { style:{ fontSize:22, fontWeight:700, color:"#1e1645" } }, `${fmtDec(estHoursSaved / Math.max(1, activeUserCount), 1)} hrs`)
           )
         ),
-        React.createElement("p", {
-          style:{ fontSize:11, color:"#6b7280", fontStyle:"italic", marginTop:8, marginBottom:20 }
-        },
-          "Time estimate: requests \u00d7 20 min avg task \u00d7 role savings benchmark (Legal 40%, Finance 35%, Advisory 30%). " +
-          "Sources: McKinsey, Harvard Business School, BCG \u2014 conservative lower-bound estimates. " +
-          "Hourly rate: A$200. Adjust in Settings."
+        React.createElement("div", { style:{ marginTop:8, marginBottom:20, display:"flex", alignItems:"center", flexWrap:"wrap", gap:4 } },
+          React.createElement("p", {
+            style:{ fontSize:11, color:"#6b7280", fontStyle:"italic", margin:0 }
+          },
+            "Estimates use role-weighted task benchmarks (HBS/BCG/Stanford). Calibrate accuracy by logging completed tasks with the 'Log a Win' button. Hourly rate: A$" + (settings.roiHourlyRate || 200) + ". Adjust in Settings."
+          ),
+          React.createElement("button", {
+            onClick: () => window.alert("Time log feature coming soon. Contact Travis to set up your first workflow."),
+            style:{ background:"#88aa00", color:"#1a1a1a", fontSize:11, padding:"3px 10px", borderRadius:9999, border:"none", cursor:"pointer", marginLeft:8, fontWeight:600 }
+          }, "\uD83D\uDCDD Log a Win")
         ),
         React.createElement("div", { style:{ background:"#f5f3ff", border:`1px solid ${COLOURS.advisory}`, borderRadius:6, padding:"8px 12px", marginBottom:14, fontSize:12, color:COLOURS.bodyText } },
           hasBehaviorData
@@ -1530,12 +1536,6 @@
           React.createElement(StatBox, { label:"Frank Advisory", value:`${advisory.filter(u=>u.totalRequests>0).length} / ${advisory.length}`, sub:"used Claude this period", colour:COLOURS.advisory }),
           React.createElement(StatBox, { label:"Frank Law", value:`${law.filter(u=>u.totalRequests>0).length} / ${law.length}`, sub:"used Claude this period", colour:COLOURS.law }),
           React.createElement(StatBox, { label:"Avg Fluency Score", value:fmtDec(metrics.avg_fluency_score,0), sub:`active users avg · org-wide: ${fmtDec(metrics.org_fluency_score,0)}`, colour:COLOURS.accent })
-        ),
-        React.createElement("div", { style:{ background:"#f8fafc", borderRadius:6, padding:"10px 14px", marginBottom:16, fontSize:13 } },
-          React.createElement("span", { style:{ fontWeight:600, color:COLOURS.bodyText } }, "Model Efficiency: "),
-          React.createElement("span", { style:{ color: metrics.org_opus_pct > 80 ? "#dc2626" : metrics.org_opus_pct > 50 ? "#f59e0b" : "#166534" } },
-            `${fmtDec(100-metrics.org_opus_pct,0)}% non-Opus spend`),
-          React.createElement("span", { style:{ color:"#9ca3af", marginLeft:8 } }, `(${fmtDec(metrics.org_opus_pct,0)}% Opus)`)
         ),
         React.createElement("div", { style:{ display:"flex", gap:16, flexWrap:"wrap", marginBottom:12, fontSize:12 } },
           [
@@ -1551,9 +1551,21 @@
             )
           )
         ),
+        React.createElement("div", { style:{ fontSize:13, fontWeight:600, color:COLOURS.bodyText, marginBottom:8 } }, "Digital Fluency Tiers"),
+        React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:8 } },
+          ...users.map(u =>
+            React.createElement("div", { key:u.email, style:{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, padding:"8px 10px", background:"#f9fafb", borderRadius:8, border:"1px solid #e5e7eb", minWidth:90 } },
+              React.createElement("div", { style:{ width:32, height:32, borderRadius:"50%", background:tierColour(u.fluencyTier), display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontWeight:700, fontSize:12 } },
+                u.fluencyTier === 1 ? "★" : `T${u.fluencyTier}`),
+              React.createElement("div", { style:{ fontSize:11, fontWeight:600, color:"#374151", textAlign:"center" } }, u.name.split(' ')[0]),
+              React.createElement("div", { style:{ fontSize:10, color:"#6b7280" } }, `${fmtDec(u.fluencyScore,0)} pts`),
+              React.createElement(Badge, { tier:u.fluencyTier })
+            )
+          )
+        ),
         React.createElement("button", {
           onClick: () => setShowFluencyLegend(v => !v),
-          style:{ background:"none", border:"none", padding:0, fontSize:12, color:"#2563eb", cursor:"pointer", marginBottom:12, textDecoration:"underline" }
+          style:{ background:"none", border:"none", padding:0, fontSize:12, color:"#2563eb", cursor:"pointer", marginTop:12, marginBottom:12, textDecoration:"underline" }
         }, "\u24d8 How is this score calculated?"),
         showFluencyLegend && React.createElement("div", {
           style:{ background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:8, padding:"16px 20px", marginTop:0, marginBottom:16, fontSize:13, lineHeight:1.7 }
@@ -1581,18 +1593,6 @@
           ),
           React.createElement("p", { style:{ marginTop:12, color:"#4a4a4a", fontSize:12, margin:"12px 0 0" } },
             "Tier bands: \u2605 Super User \u2265 70 \u2502 Active 40\u201369 \u2502 Getting Started 10\u201339 \u2502 Not Yet Active < 10"
-          )
-        ),
-        React.createElement("div", { style:{ fontSize:13, fontWeight:600, color:COLOURS.bodyText, marginBottom:8 } }, "Digital Fluency Tiers"),
-        React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:8 } },
-          ...users.map(u =>
-            React.createElement("div", { key:u.email, style:{ display:"flex", flexDirection:"column", alignItems:"center", gap:4, padding:"8px 10px", background:"#f9fafb", borderRadius:8, border:"1px solid #e5e7eb", minWidth:90 } },
-              React.createElement("div", { style:{ width:32, height:32, borderRadius:"50%", background:tierColour(u.fluencyTier), display:"flex", alignItems:"center", justifyContent:"center", color:"#fff", fontWeight:700, fontSize:12 } },
-                u.fluencyTier === 1 ? "★" : `T${u.fluencyTier}`),
-              React.createElement("div", { style:{ fontSize:11, fontWeight:600, color:"#374151", textAlign:"center" } }, u.name),
-              React.createElement("div", { style:{ fontSize:10, color:"#6b7280" } }, `${fmtDec(u.fluencyScore,0)} pts`),
-              React.createElement(Badge, { tier:u.fluencyTier })
-            )
           )
         ),
         trendSeries && trendSeries.length > 1 && React.createElement("div", { style:{ marginTop:22 } },
@@ -1664,7 +1664,7 @@
                   const sonnetPct = u.totalSpendUSD > 0 ? (u.modelBreakdown?.Sonnet?.spend||0)/u.totalSpendUSD*100 : 0;
                   const haikuPct  = u.totalSpendUSD > 0 ? (u.modelBreakdown?.Haiku?.spend||0)/u.totalSpendUSD*100 : 0;
                   return React.createElement("tr", { key:u.email, style:{ borderBottom:"1px solid #f3f4f6" } },
-                    React.createElement("td", { style:{ padding:"4px 8px", fontWeight:u.isBenchmark?700:400 } }, u.name, u.isBenchmark && React.createElement("span", { style:{ fontSize:10, color:"#6b7280", marginLeft:4 } }, "(Benchmark)")),
+                    React.createElement("td", { style:{ padding:"4px 8px", fontWeight:u.isBenchmark?700:400 } }, u.name.split(' ')[0], u.isBenchmark && React.createElement("span", { style:{ fontSize:10, color:"#6b7280", marginLeft:4 } }, "(Benchmark)")),
                     React.createElement("td", { style:{ padding:"4px 8px", color:"#6b7280" } }, u.entity),
                     React.createElement("td", { style:{ padding:"4px 8px", color:COLOURS.opus, fontWeight:600 } }, `${fmtDec(u.opusPct,0)}%`),
                     React.createElement("td", { style:{ padding:"4px 8px", color:COLOURS.sonnet } }, `${fmtDec(sonnetPct,0)}%`),
@@ -1681,7 +1681,7 @@
         ),
         flagged.length > 0 && React.createElement("div", { style:{ background:"#fef2f2", borderRadius:6, padding:"10px 14px", marginBottom:12, fontSize:12 } },
           React.createElement("strong", { style:{ color:"#dc2626" } }, `⚑ Model Governance Flags (${flagged.length} users above 80% Opus):`),
-          ...flagged.map(u => React.createElement("div", { key:u.email, style:{ marginTop:4, color:"#374151" } }, `• ${u.name}: ${fmtDec(u.opusPct,0)}% Opus — recommend switching Cowork/Chat to Sonnet`))
+          ...flagged.map(u => React.createElement("div", { key:u.email, style:{ marginTop:4, color:"#374151" } }, `• ${u.name.split(' ')[0]}: ${fmtDec(u.opusPct,0)}% Opus — recommend switching Cowork/Chat to Sonnet`))
         ),
         React.createElement("button", { onClick:()=>setShowRecs(!showRecs), style:{ background:"none", border:"1px solid #d1d5db", borderRadius:6, padding:"6px 12px", fontSize:12, cursor:"pointer", color:"#374151" } },
           showRecs ? "▲ Hide" : "▼ Show", " Model Recommendation Library"),
@@ -1767,7 +1767,7 @@
         },
           React.createElement("strong", null, "Spend Notice \u2014 "),
           `${atRisk.length} team member${atRisk.length > 1 ? "s are" : " is"} approaching their monthly limit: `,
-          atRisk.map(u => `${u.name} (${Math.round((u.totalSpendAUD / u.spendLimit) * 100)}%)`).join(", ")
+          atRisk.map(u => `${u.name.split(' ')[0]} (${Math.round((u.totalSpendAUD / u.spendLimit) * 100)}%)`).join(", ")
         ),
         React.createElement("div", { style:{ fontSize:12, color:COLOURS.captionText, marginBottom:10 } },
           React.createElement("strong", { style:{ color:COLOURS.advisory } }, "Claude Code: "),
@@ -1797,7 +1797,7 @@
                 const rows = [
                   React.createElement("tr", { key:u.email, style:{ borderBottom:"1px solid #f3f4f6", background:u.totalRequests===0 && !(u.codeSpendUSD > 0)?"#fafafa":"#fff", opacity:u.totalRequests===0 && !(u.codeSpendUSD > 0)?0.6:1 } },
                     React.createElement("td", { style:{ padding:"6px 10px", fontWeight:600 } },
-                      u.name,
+                      u.name.split(' ')[0],
                       u.isBenchmark && React.createElement("span", { style:{ fontSize:10, color:"#6b7280", marginLeft:4 } }, "(Benchmark)"),
                       u.fluencyTier===1 && React.createElement("span", { title:"Candidate internal AI trainer", style:{ marginLeft:4, fontSize:10, background:COLOURS.advisory, color:"#fff", padding:"1px 5px", borderRadius:9999 } }, "★ Super User"),
                       u.totalRequests===0 && !(u.codeSpendUSD > 0) && React.createElement("span", { style:{ fontSize:10, color:"#9ca3af", marginLeft:4 } }, "Not active this period")
@@ -1941,14 +1941,14 @@
                 React.createElement(YAxis, { type:"category", dataKey:"name", width:95, fontSize:11 }),
                 React.createElement(Tooltip, { formatter:(v,n)=>[fmtUSD(v),"Spend USD"] }),
                 React.createElement(Bar, { dataKey:"spend", radius:[0,4,4,0] },
-                  ...surfaceData.map(e => React.createElement(Cell, { key:e.name, fill:e.opusPct>80?COLOURS.opus:e.opusPct>50?"#f59e0b":COLOURS.sonnet }))
+                  ...surfaceData.map((e, i) => React.createElement(Cell, { key:e.name, fill:SURFACE_PALETTE[i % SURFACE_PALETTE.length] }))
                 )
               )
             ),
-            React.createElement("div", { style:{ display:"flex", gap:12, marginTop:4, fontSize:11, color:"#6b7280" } },
-              React.createElement("span", { style:{ color:COLOURS.opus } }, "■ Opus-dominant (>80%)"),
-              React.createElement("span", { style:{ color:"#f59e0b" } }, "■ Mixed (50–80%)"),
-              React.createElement("span", { style:{ color:COLOURS.sonnet } }, "■ Efficient (<50%)")
+            React.createElement("div", { style:{ display:"flex", gap:12, marginTop:4, fontSize:11, color:"#6b7280", flexWrap:"wrap" } },
+              ...SURFACE_PALETTE.slice(0, surfaceData.length).map((color, i) =>
+                surfaceData[i] && React.createElement("span", { key:i, style:{ color } }, `■ ${surfaceData[i].name}`)
+              )
             )
           ),
           React.createElement("div", null,
@@ -2451,23 +2451,9 @@ Generated by Frank Group AI Governance Dashboard`);
           "Or use the template button without a key. Then copy, download Word-compatible .doc, plain .txt, or Print / Save as PDF. ",
           "If the API is unavailable, a template report can be filled in automatically."
         ),
-        React.createElement("div", { style:{ marginBottom:14 } },
-          React.createElement("label", { htmlFor:"module8-openrouter-key", style:{ display:"block", fontSize:12, fontWeight:600, color:COLOURS.bodyText, marginBottom:6 } }, "OpenRouter API key (this tab only)"),
-          React.createElement("input", {
-            id:"module8-openrouter-key",
-            type:"password",
-            autoComplete:"off",
-            value: reportApiKey,
-            onChange: e => setReportApiKey(e.target.value),
-            placeholder:"sk-or-v1-…",
-            style:{ width:"100%", maxWidth:480, boxSizing:"border-box", padding:"8px 12px", fontSize:13, border:`1px solid #e5e7eb`, borderRadius:6, fontFamily:"ui-monospace, monospace" }
-          }),
-          React.createElement("div", { style:{ fontSize:11, color:COLOURS.captionText, marginTop:6, lineHeight:1.45 } },
-            runtimeCfg?.OPENROUTER_API_KEY
-              ? "OpenRouter key pre-loaded from server config (Railway / dashboard-config.json). Optional: paste a different key here for this session only (cleared on reload)."
-              : "Create a key at openrouter.ai. Kept in memory for this session only (cleared on reload). Do not commit API keys to git or ship them in deployed HTML."
-          )
-        ),
+        !runtimeCfg?.OPENROUTER_API_KEY && React.createElement("div", {
+          style:{ background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:6, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#6b7280", fontStyle:"italic" }
+        }, "AI narrative generation requires OPENROUTER_API_KEY to be configured in Railway environment variables \u2014 contact your administrator."),
         aiError && React.createElement("div", { style:{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6, padding:"10px 14px", fontSize:12, color:"#b91c1c", marginBottom:12, whiteSpace:"pre-wrap" } }, aiError),
         React.createElement("div", { style:{ display:"flex", flexWrap:"wrap", gap:10, marginBottom:16, alignItems:"center" } },
           React.createElement("button", {
@@ -2519,20 +2505,20 @@ Generated by Frank Group AI Governance Dashboard`);
 
       while (positives.length < 2) positives.push("Every expert was once a beginner — small weekly experiments add up.");
 
-      if ((proj.count||0) === 0 && user.totalRequests > 0) actions.push("Create a Project for a recurring workflow so instructions and files stay in one place.");
-      if ((mem.memoryLen||0) === 0 && user.totalRequests > 0) actions.push("Add concise Memory bullets (role, preferences) to speed up every new chat.");
-      if ((conv.avgDepth||0) > 0 && (conv.avgDepth||0) < 2.5 && (conv.count||0) > 0) actions.push("Try multi-turn refinement: one improvement per message instead of one-shot prompts.");
-      if (user.surfaceCount <= 1 && user.totalRequests > 0) actions.push("Try another surface where it fits (Cowork for long docs, Research for synthesis).");
-      if (user.opusPct > 70 && user.totalRequests > 0) actions.push("Shift routine drafting to Sonnet; keep Opus for judgement-heavy work only.");
-      if (daysSince != null && daysSince > 7 && user.totalRequests > 0) actions.push("No Claude.ai activity in the last week in this export — even a quick task keeps momentum.");
+      let nudge;
+      if (user.fluencyTier === 1) {
+        nudge = "Top of the board this period. Consider sharing one workflow with the team at the next AI committee meeting.";
+      } else if (user.fluencyTier === 2 && user.opusPct > 80) {
+        nudge = "You\u2019re relying heavily on Claude\u2019s most powerful model. Try Sonnet for drafting, reformatting and summarising \u2014 it\u2019s faster and costs less.";
+      } else if (user.fluencyTier === 2) {
+        nudge = "Solid usage this period. Your next step: tackle one more recurring task and build it into a repeatable prompt.";
+      } else if (user.fluencyTier === 3) {
+        nudge = "You\u2019re getting started \u2014 great. Pick one task you do every week and delegate it entirely to Claude. Run it 3 times this week.";
+      } else {
+        nudge = "No usage logged this period. Book 15 minutes with Travis to set up your first Claude workflow.";
+      }
 
-      while (actions.length < 2) actions.push("Pick one task to template this week; reuse the prompt next time.");
-
-      const encouragement = user.fluencyTier <= 2
-        ? "Solid momentum — consider sharing one playbook with a teammate."
-        : "Small upgrades compound — one focused habit for seven days.";
-
-      return { positives: positives.slice(0, 3), actions: actions.slice(0, 3), encouragement };
+      return { positives: positives.slice(0, 3), actions: [nudge], encouragement: "" };
     }
 
     // Module 9 — Coaching & leaderboard
@@ -2564,7 +2550,7 @@ Generated by Frank Group AI Governance Dashboard`);
           ...ranked.map((u, i) =>
             React.createElement("div", { key:u.email, style:{ display:"flex", alignItems:"center", gap:12, padding:"10px 12px", borderRadius:8, border:"1px solid #e5e7eb", background: i===0 ? "#f5f3ff" : "#fafafa" } },
               React.createElement("div", { style:{ fontWeight:800, color:COLOURS.advisory, width:28 } }, `#${i+1}`),
-              React.createElement("div", { style:{ flex:1, fontWeight:600 } }, u.name, i===0 && React.createElement("span", { style:{ marginLeft:8, fontSize:11, color:COLOURS.accent } }, "Top")),
+              React.createElement("div", { style:{ flex:1, fontWeight:600 } }, u.name.split(' ')[0], i===0 && React.createElement("span", { style:{ marginLeft:8, fontSize:11, color:COLOURS.accent } }, "Top")),
               React.createElement(Badge, { tier:u.fluencyTier }),
               React.createElement("div", { style:{ fontWeight:800, color:COLOURS.accent, minWidth:56, textAlign:"right" } }, `${fmtDec(u.fluencyScore,1)} pts`)
             )
@@ -2584,7 +2570,7 @@ Generated by Frank Group AI Governance Dashboard`);
             const { positives, actions, encouragement } = getCoachingCopy(u);
             return React.createElement("div", { key:u.email, style:{ border:"1px solid #e5e7eb", borderRadius:8, padding:14, background:"#fff" } },
               React.createElement("div", { style:{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8, flexWrap:"wrap", gap:6 } },
-                React.createElement("span", { style:{ fontWeight:700, color:COLOURS.advisory } }, u.name),
+                React.createElement("span", { style:{ fontWeight:700, color:COLOURS.advisory } }, u.name.split(' ')[0]),
                 React.createElement(Badge, { tier:u.fluencyTier })
               ),
               React.createElement("div", { style:{ fontSize:11, color:COLOURS.captionText, marginBottom:8 } }, u.entity, " · ", u.seatTier || "Standard", " seat"),
@@ -3185,10 +3171,9 @@ Generated by Frank Group AI Governance Dashboard`);
           React.createElement("div", null,
             React.createElement("div", { style:{ fontSize:12, fontWeight:700, color:COLOURS.accent, letterSpacing:2, textTransform:"uppercase" } }, "The Frank Group"),
             React.createElement("div", { className:"dash-title", style:{ fontSize:22, fontWeight:800, letterSpacing:0.3 } }, "AI Governance Dashboard"),
-            React.createElement("div", { style:{ fontSize:13, opacity:0.9, marginTop:4 } }, "Frank Advisory · Frank Law · Phase 2 preview")
+            React.createElement("div", { style:{ fontSize:13, opacity:0.9, marginTop:4 } }, "Frank Advisory · Frank Law · Frank Capital")
           ),
           React.createElement("div", { style:{ textAlign:"right" } },
-            !rawRows && !usageRowsData && React.createElement("div", { style:{ fontSize:11, background:"#2563eb", color:"#fff", padding:"4px 12px", borderRadius:9999 } }, "Demo mode — upload CSV to load real data"),
             (rawRows || usageRowsData) && React.createElement("div", { style:{ fontSize:11, background:COLOURS.accent, color:"#1a1a1a", padding:"4px 12px", borderRadius:9999, fontWeight:700 } },
               usageRowsData ? `DB · ${activeperiodLabel || dateRangeFrom}` : `Live: ${dateRange}`
             )
@@ -3284,8 +3269,8 @@ Generated by Frank Group AI Governance Dashboard`);
             React.createElement(Module4, { users, onUpdateLimit:updateLimit, audRate: settings.audRate, readOnly: false, userSpendTrends, isSampleData, dateRangeFrom, dateRangeTo }),
             React.createElement(Module5, { users, isSampleData }),
             React.createElement(Module7InitiativeTracker, { initiatives, onAddInitiative: handleInitiativeAdd, onUpdateInitiative: handleInitiativeUpdate, onDeleteInitiative: handleInitiativeDelete, metrics, readOnly: false, isSampleData }),
-            React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange: reportDateRange, hasBehaviorData: hasBehaviorDataForModules, runtimeCfg, isSampleData }),
             React.createElement(Module9Coaching, { users, metrics, hasBehaviorData: hasBehaviorDataForModules, isSampleData }),
+            React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange: reportDateRange, hasBehaviorData: hasBehaviorDataForModules, runtimeCfg, isSampleData }),
             React.createElement(Module6, { users, settings, dateRange: reportDateRange, isSampleData })
           )
         ),
