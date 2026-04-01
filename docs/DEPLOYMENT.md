@@ -79,7 +79,7 @@ git reset HEAD <file>
   "version": "1.0.0",
   "scripts": {
     "prestart": "node scripts/write-dashboard-config-from-env.js",
-    "start": "npx serve . --listen $PORT --no-clipboard"
+    "start": "npx serve . --listen tcp://0.0.0.0:${PORT:-8080} --single --no-clipboard"
   }
 }
 ```
