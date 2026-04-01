@@ -220,3 +220,29 @@ create policy "settings_select_authenticated" on public.app_settings for select 
 create policy "settings_insert_authenticated" on public.app_settings for insert to authenticated with check (true);
 create policy "settings_update_authenticated" on public.app_settings for update to authenticated using (true) with check (true);
 create policy "settings_delete_authenticated" on public.app_settings for delete to authenticated using (true);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Schema Hardening — Phase 3 additions (see docs/schema-hardening-migrations.sql
+-- for the full set including P1 constraint fixes applied separately)
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- usage_rows: raw Anthropic CSV rows for SQL analytics
+-- (full DDL + RLS in schema-hardening-migrations.sql Migration 2)
+
+-- period_model_breakdown / period_product_breakdown: normalised breakdown rows
+-- (full DDL + RLS in schema-hardening-migrations.sql Migration 3)
+
+-- seats: 8 current seats replacing hardcoded USERS_MAP in index.html
+-- (full DDL + RLS + seed in schema-hardening-migrations.sql Migration 4)
+
+-- initiatives: row-level tracking replacing app_settings JSONB blob
+-- (full DDL + RLS + seed in schema-hardening-migrations.sql Migration 6)
+
+-- Data quality fixes (P2-D through P3-C):
+--   uploads.file_type CHECK constraint
+--   period_users.code_spend_usd, code_tokens columns
+--   uploads.period_id FK
+--   period_users numeric precision (12,6) / (5,2)
+--   app_settings updated_at trigger
+--   uploads.file_size bigint
+-- (all in schema-hardening-migrations.sql Migration 5)

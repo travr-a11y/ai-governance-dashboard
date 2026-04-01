@@ -667,12 +667,32 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
 
     // ─── Aggregation ──────────────────────────────────────────────────────────────
 
-    function aggregateData(rows, audRate, behavior, codeRow) {
+    function aggregateData(rows, audRate, behavior, codeRow, seatsOverride = null) {
+      // Build lookup maps: prefer seatsOverride (from DB) when available, else fall back to hardcoded constants
+      const usersMap = seatsOverride
+        ? Object.fromEntries(seatsOverride.map(s => [s.email, {
+            name: s.display_name, entity: s.entity, seatTier: s.seat_tier,
+            spendLimit: s.spend_limit_aud, isBenchmark: s.is_benchmark,
+          }]))
+        : USERS_MAP;
+      const lowerEmailToKey = Object.fromEntries(Object.keys(usersMap).map(k => [k.toLowerCase(), k]));
+      const seatTierMap = seatsOverride
+        ? Object.fromEntries(seatsOverride.map(s => [s.email, s.seat_tier]))
+        : SEAT_TIERS;
+      const spendLimitLower = seatsOverride
+        ? Object.fromEntries(seatsOverride.map(s => [s.email.toLowerCase(), s.spend_limit_aud ?? undefined]))
+        : SPEND_LIMIT_BY_LOWERCASE;
+      const resolveSpendLimit = email => {
+        if (!email) return undefined;
+        const lower = String(email).toLowerCase();
+        return Object.prototype.hasOwnProperty.call(spendLimitLower, lower) ? spendLimitLower[lower] : undefined;
+      };
+
       const b = behavior || { hasBehaviorData: false, convByEmail: {}, projByEmail: {}, memByEmail: {}, userMetaByEmail: {} };
       const byUser = {};
       rows.forEach(row => {
         const emailRaw = row.user_email || "";
-        const mapKey = LOWER_EMAIL_TO_KEY[emailRaw.toLowerCase()] || emailRaw;
+        const mapKey = lowerEmailToKey[emailRaw.toLowerCase()] || emailRaw;
         if (!byUser[mapKey]) {
           byUser[mapKey] = { email: mapKey, modelBreakdown: {}, productBreakdown: {}, totalSpendUSD: 0, totalPromptTokens: 0, totalCompletionTokens: 0, totalRequests: 0 };
         }
@@ -694,7 +714,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
       });
 
       const presentEmailsLower = new Set(Object.keys(byUser).map(e => e.toLowerCase()));
-      Object.keys(USERS_MAP).forEach(k => {
+      Object.keys(usersMap).forEach(k => {
         if (!presentEmailsLower.has(k.toLowerCase())) {
           byUser[k] = { email:k, modelBreakdown:{}, productBreakdown:{}, totalSpendUSD:0, totalPromptTokens:0, totalCompletionTokens:0, totalRequests:0 };
         }
@@ -702,7 +722,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
 
       const allUsers = Object.values(byUser);
       if (codeRow && codeRow.email) {
-        const codeUserKey = LOWER_EMAIL_TO_KEY[codeRow.email.toLowerCase()];
+        const codeUserKey = lowerEmailToKey[codeRow.email.toLowerCase()];
         const codeTargetUser = allUsers.find(u => u.email?.toLowerCase() === codeUserKey?.toLowerCase());
         if (codeTargetUser) {
           codeTargetUser.totalSpendUSD += codeRow.spendUsd || 0;
@@ -728,8 +748,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
         : 1;
 
       return allUsers.map(u => {
-        const mapKey = LOWER_EMAIL_TO_KEY[u.email.toLowerCase()];
-        const info = mapKey ? USERS_MAP[mapKey] : null;
+        const mapKey = lowerEmailToKey[u.email.toLowerCase()];
+        const info = mapKey ? usersMap[mapKey] : null;
         const emailKey = mapKey || u.email;
         const totalTokens = u.totalPromptTokens + u.totalCompletionTokens;
         const opusSpend = u.modelBreakdown["Opus"]?.spend || 0;
@@ -757,7 +777,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
           fluencyScore = spendSignal;
         }
         const fluencyTier = fluencyScore >= 70 ? 1 : fluencyScore >= 40 ? 2 : fluencyScore >= 10 ? 3 : 4;
-        const spendLimit = getSpendLimitForEmail(u.email);
+        const spendLimit = resolveSpendLimit(u.email);
         const spendAUD = u.totalSpendUSD * audRate;
         const spendUtilisation = spendLimit ? (spendAUD / spendLimit) * 100 : null;
         let entity = info?.entity;
@@ -766,7 +786,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
           else if (u.email.toLowerCase().includes("franklaw")) entity = "Frank Law";
           else entity = "Unknown Entity";
         }
-        const seatTier = SEAT_TIERS[emailKey] || "Standard";
+        const seatTier = seatTierMap[emailKey] || info?.seatTier || "Standard";
         return {
           email: u.email, name: info?.name || u.email, entity, isBenchmark: info?.isBenchmark || false,
           totalSpendUSD: u.totalSpendUSD, totalSpendAUD: spendAUD,
@@ -1873,7 +1893,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;color:#1a1a1a;margin:0;padding:24px
     }
 
     // Module 7 — AI Committee Initiative Tracker
-    function Module7InitiativeTracker({ initiatives, setInitiatives, metrics, readOnly }) {
+    function Module7InitiativeTracker({ initiatives, onAddInitiative, onUpdateInitiative, onDeleteInitiative, metrics, readOnly }) {
       const [editId, setEditId]   = useState(null);
       const [form, setForm]       = useState({});
       const metricKeys = ["active_users_count","org_adoption_pct","frank_law_adoption_pct","org_opus_pct","total_tokens","avg_fluency_score"];
@@ -1891,8 +1911,12 @@ body{font-family:'Segoe UI',Arial,sans-serif;color:#1a1a1a;margin:0;padding:24px
       });
 
       const startEdit = init => { setEditId(init.id); setForm({ name:init.name, owner:init.owner, targetMetric:init.targetMetric, targetValue:init.targetValue, lowerIsBetter:init.lowerIsBetter??false }); };
-      const saveEdit  = () => { setInitiatives(p => p.map(i => i.id===editId ? {...i,...form,targetValue:parseFloat(form.targetValue)||0} : i)); setEditId(null); };
-      const addNew    = () => { const id=Date.now().toString(); setInitiatives(p=>[...p,{id,name:"New Initiative",owner:"",targetMetric:"active_users_count",targetValue:0,lowerIsBetter:false,statusOverride:null}]); setEditId(id); setForm({name:"New Initiative",owner:"",targetMetric:"active_users_count",targetValue:0,lowerIsBetter:false}); };
+      const saveEdit  = () => { onUpdateInitiative(editId, form); setEditId(null); };
+      const addNew    = async () => {
+        const id = await onAddInitiative();
+        setEditId(id);
+        setForm({ name:"New Initiative", owner:"", targetMetric:"active_users_count", targetValue:0, lowerIsBetter:false });
+      };
       const exportJSON= () => { const b=new Blob([JSON.stringify(initiatives,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(b); a.download="initiatives.json"; a.click(); };
 
       return React.createElement(Card, null,
@@ -1931,7 +1955,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;color:#1a1a1a;margin:0;padding:24px
                     ),
                     !readOnly && React.createElement("div", { style:{ display:"flex", gap:4 } },
                       React.createElement("button", { onClick:()=>startEdit(init), style:{ background:"none", border:"1px solid #d1d5db", borderRadius:4, padding:"2px 8px", fontSize:11, cursor:"pointer" } }, "Edit"),
-                      React.createElement("button", { onClick:()=>setInitiatives(p=>p.filter(i=>i.id!==init.id)), style:{ background:"none", border:"1px solid #fca5a5", color:"#dc2626", borderRadius:4, padding:"2px 6px", fontSize:11, cursor:"pointer" } }, "✕")
+                      React.createElement("button", { onClick:()=>onDeleteInitiative(init.id), style:{ background:"none", border:"1px solid #fca5a5", color:"#dc2626", borderRadius:4, padding:"2px 6px", fontSize:11, cursor:"pointer" } }, "✕")
                     )
                   )
             )
@@ -2347,6 +2371,8 @@ Generated by Frank Group AI Governance Dashboard`);
       const settingsLoadedFromDbRef = React.useRef(false);
       const [savingPeriod, setSavingPeriod] = useState(false);
       const [periodSaveMsg, setPeriodSaveMsg] = useState("");
+      const [seatsFromDb, setSeatsFromDb] = useState(null);
+      const [modelTrendRows, setModelTrendRows] = useState([]);
 
       const ingestHandlersRef = React.useRef({});
       const autoCloudIngestDoneRef = React.useRef(false);
@@ -2394,17 +2420,38 @@ Generated by Frank Group AI Governance Dashboard`);
       useEffect(() => {
         if (!supabaseClient) {
           setTrendFlatRows([]);
+          setModelTrendRows([]);
           return undefined;
         }
         let cancelled = false;
         (async () => {
-          const { data: pu, error: e2 } = await supabaseClient
-            .from("period_users")
-            .select("email,total_spend_usd,total_tokens,total_requests,fluency_score,period_id,periods(created_at,label,date_from,date_to)");
-          if (!cancelled && !e2) setTrendFlatRows(pu || []);
+          const [{ data: pu, error: e2 }, { data: pmb }] = await Promise.all([
+            supabaseClient
+              .from("period_users")
+              .select("email,total_spend_usd,total_tokens,total_requests,fluency_score,period_id,periods(created_at,label,date_from,date_to)"),
+            supabaseClient
+              .from("period_model_breakdown")
+              .select("period_id,email,model_class,spend_usd,tokens"),
+          ]);
+          if (!cancelled) {
+            if (!e2) setTrendFlatRows(pu || []);
+            if (pmb) setModelTrendRows(pmb);
+          }
         })();
         return () => { cancelled = true; };
       }, [supabaseClient, trendRefreshKey]);
+
+      // ── seats: load from DB on init (fallback to hardcoded USERS_MAP if unavailable) ─
+      useEffect(() => {
+        if (!supabaseClient) { setSeatsFromDb(null); return undefined; }
+        supabaseClient
+          .from("seats")
+          .select("email, display_name, entity, seat_tier, spend_limit_aud, is_benchmark, active")
+          .eq("active", true)
+          .then(({ data, error }) => {
+            if (!error && data?.length) setSeatsFromDb(data);
+          });
+      }, [supabaseClient]);
 
       const bumpUploadsRefresh = useCallback(() => setUploadsRefreshKey(k => k + 1), []);
 
@@ -2457,9 +2504,7 @@ Generated by Frank Group AI Governance Dashboard`);
               if (row.key === "dashboard_settings" && row.value) {
                 setSettings(s => ({ ...s, ...row.value }));
               }
-              if (row.key === "initiatives" && Array.isArray(row.value)) {
-                setInitiatives(row.value);
-              }
+              // initiatives are now loaded from the initiatives table (see below)
               if (row.key === "spend_overrides" && row.value && typeof row.value === "object") {
                 setSpendOverrides(row.value);
               }
@@ -2470,16 +2515,38 @@ Generated by Frank Group AI Governance Dashboard`);
         return () => { cancelled = true; };
       }, [supabaseClient]);
 
+      // ── initiatives: load from DB table on init ───────────────────────────────
+      useEffect(() => {
+        if (!supabaseClient) return;
+        let cancelled = false;
+        (async () => {
+          const { data, error } = await supabaseClient
+            .from("initiatives")
+            .select("id,name,owner,target_metric,target_value,lower_is_better,status_override,sort_order")
+            .order("sort_order", { ascending: true });
+          if (cancelled) return;
+          if (!error && data?.length) {
+            setInitiatives(data.map(r => ({
+              id: r.id,
+              name: r.name,
+              owner: r.owner || "",
+              targetMetric: r.target_metric || "active_users_count",
+              targetValue: r.target_value ?? 0,
+              lowerIsBetter: r.lower_is_better ?? false,
+              statusOverride: r.status_override || null,
+            })));
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [supabaseClient]);
+
       // ── app_settings: save on change (only after initial load) ───────────────
       useEffect(() => {
         if (!settingsLoadedFromDbRef.current || !supabaseClient) return;
         saveAppSetting(supabaseClient, "dashboard_settings", settings);
       }, [supabaseClient, settings]);
 
-      useEffect(() => {
-        if (!settingsLoadedFromDbRef.current || !supabaseClient) return;
-        saveAppSetting(supabaseClient, "initiatives", initiatives);
-      }, [supabaseClient, initiatives]);
+      // initiatives are saved via row-level callbacks below — not via app_settings
 
       useEffect(() => {
         if (!settingsLoadedFromDbRef.current || !supabaseClient) return;
@@ -2496,7 +2563,7 @@ Generated by Frank Group AI Governance Dashboard`);
       const rows = rawRows || SAMPLE_DATA;
 
       const liveUsersBase = useMemo(() => {
-        const agg = aggregateData(rows, settings.audRate, behavior, codeData);
+        const agg = aggregateData(rows, settings.audRate, behavior, codeData, seatsFromDb);
         return agg.map(u => {
           if (spendOverrides[u.email] !== undefined) {
             const limit = spendOverrides[u.email];
@@ -2623,10 +2690,44 @@ Generated by Frank Group AI Governance Dashboard`);
             fluency_tier:     u.fluencyTier,
             model_breakdown:  u.modelBreakdown,
             product_breakdown: u.productBreakdown,
+            code_spend_usd:   u.codeSpendUSD || null,
+            code_tokens:      u.codeTokens   || null,
           }));
 
           const { error: puErr } = await supabaseClient.from("period_users").insert(periodUserRows);
           if (puErr) throw puErr;
+
+          // Build normalised breakdown rows for SQL analytics
+          const modelBreakdownRows = [];
+          const productBreakdownRows = [];
+          for (const u of users) {
+            for (const [modelClass, data] of Object.entries(u.modelBreakdown || {})) {
+              if (data.spend > 0 || data.tokens > 0) {
+                modelBreakdownRows.push({
+                  period_id: periodId, email: u.email,
+                  model_class: modelClass,
+                  spend_usd: data.spend || 0, tokens: data.tokens || 0, requests: data.requests || 0,
+                });
+              }
+            }
+            for (const [product, data] of Object.entries(u.productBreakdown || {})) {
+              if (data.spend > 0 || data.tokens > 0) {
+                productBreakdownRows.push({
+                  period_id: periodId, email: u.email,
+                  product,
+                  spend_usd: data.spend || 0, tokens: data.tokens || 0, requests: data.requests || 0,
+                });
+              }
+            }
+          }
+          await Promise.all([
+            modelBreakdownRows.length
+              ? supabaseClient.from("period_model_breakdown").insert(modelBreakdownRows)
+              : Promise.resolve(),
+            productBreakdownRows.length
+              ? supabaseClient.from("period_product_breakdown").insert(productBreakdownRows)
+              : Promise.resolve(),
+          ]);
 
           setTrendRefreshKey(k => k + 1);
           setPeriodSaveMsg("Period saved.");
@@ -2637,6 +2738,45 @@ Generated by Frank Group AI Governance Dashboard`);
         }
         setSavingPeriod(false);
       }, [supabaseClient, rawRows, users, dateRange]);
+
+      // ── Initiative CRUD callbacks (row-level DB ops + local state) ───────────
+      const handleInitiativeAdd = useCallback(async () => {
+        const tempId = Date.now().toString();
+        const newInit = { id: tempId, name: "New Initiative", owner: "", targetMetric: "active_users_count", targetValue: 0, lowerIsBetter: false, statusOverride: null };
+        setInitiatives(p => [...p, newInit]);
+        if (supabaseClient) {
+          const { data } = await supabaseClient
+            .from("initiatives")
+            .insert({ name: "New Initiative", owner: null, target_metric: "active_users_count", target_value: 0, lower_is_better: false, sort_order: 999 })
+            .select("id").single();
+          if (data?.id) {
+            setInitiatives(p => p.map(i => i.id === tempId ? { ...i, id: data.id } : i));
+            return data.id;
+          }
+        }
+        return tempId;
+      }, [supabaseClient]);
+
+      const handleInitiativeUpdate = useCallback((id, fields) => {
+        setInitiatives(p => p.map(i => i.id === id ? { ...i, ...fields, targetValue: parseFloat(fields.targetValue) || 0 } : i));
+        if (supabaseClient) {
+          supabaseClient.from("initiatives").update({
+            name: fields.name,
+            owner: fields.owner || null,
+            target_metric: fields.targetMetric,
+            target_value: parseFloat(fields.targetValue) || 0,
+            lower_is_better: fields.lowerIsBetter ?? false,
+          }).eq("id", id).then(({ error }) => { if (error) console.warn("initiative update:", error); });
+        }
+      }, [supabaseClient]);
+
+      const handleInitiativeDelete = useCallback((id) => {
+        setInitiatives(p => p.filter(i => i.id !== id));
+        if (supabaseClient) {
+          supabaseClient.from("initiatives").delete().eq("id", id)
+            .then(({ error }) => { if (error) console.warn("initiative delete:", error); });
+        }
+      }, [supabaseClient]);
 
       const updateLimit = (email,val) => setSpendOverrides(p=>({...p,[email]:val}));
 
@@ -2831,7 +2971,7 @@ Generated by Frank Group AI Governance Dashboard`);
             React.createElement(Module3, { users, metrics }),
             React.createElement(Module4, { users, onUpdateLimit:updateLimit, audRate: settings.audRate, readOnly: false, userSpendTrends }),
             React.createElement(Module5, { users }),
-            React.createElement(Module7InitiativeTracker, { initiatives, setInitiatives, metrics, readOnly: false }),
+            React.createElement(Module7InitiativeTracker, { initiatives, onAddInitiative: handleInitiativeAdd, onUpdateInitiative: handleInitiativeUpdate, onDeleteInitiative: handleInitiativeDelete, metrics, readOnly: false }),
             React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange: reportDateRange, hasBehaviorData: hasBehaviorDataForModules, runtimeCfg }),
             React.createElement(Module9Coaching, { users, metrics, hasBehaviorData: hasBehaviorDataForModules }),
             React.createElement(Module6, { users, settings, dateRange: reportDateRange })

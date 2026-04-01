@@ -2,7 +2,7 @@
 
 ## Project status
 
-**Phase 2: LIVE.** Supabase persistence is operational. DB tables (`uploads`, `periods`, `period_users`) and Storage bucket (`uploads`) are live in project `pwuapjdfrdbgcekrwlpr`. `railway.toml` now runs `npm start` so `prestart` writes `dashboard-config.json` from env vars before serving.
+**Phase 3: Schema hardening.** Code complete; 6 SQL migrations pending in Supabase SQL Editor. New tables: `usage_rows`, `period_model_breakdown`, `period_product_breakdown`, `seats`, `initiatives`. See `docs/schema-hardening-migrations.sql`. Phase 2 Supabase persistence remains fully operational.
 
 - GitHub: `https://github.com/travr-a11y/ai-governance-dashboard`
 - Railway: connect at railway.app → `travr-a11y/ai-governance-dashboard` (auto-deploys on push to main)
@@ -31,6 +31,9 @@ docs/
   SUPABASE_PERSISTENCE_PLAN.md           ← Phase 2 handoff (uploads table, Storage, UI)
   PHASE2_SHIP_AND_OPERATIONS_CHECKLIST.md ← Pre-ship + Railway env + ops verification
   supabase-phase2.sql                    ← periods, period_users, uploads, Storage policies
+
+  schema-hardening-migrations.sql ← 6 idempotent migrations to run in Supabase SQL Editor
+  SCHEMA_HARDENING_PLAN.md        ← Full Phase 3 implementation brief (source of truth)
 
   tasks/                          ← Pending work items (one file per task)
     TASK-01-code-csv-schema.md    ← New Claude Code API token CSV parser
@@ -182,11 +185,16 @@ git push origin main
 | Done | Module 1 history UI | List, refresh, load file, delete (Storage + row) |
 | Done | Content-hash dedup | SHA-256 `content_hash` column on `uploads`; unique partial index; skip re-upload of identical files |
 | Done | RAG document_chunks | `document_chunks` table with `vector(1536)` embeddings; `vector` extension enabled |
-| Done | ingest-process Edge Function | Deployed; chunks uploaded files + OpenRouter embeddings → `document_chunks`; requires `OPENROUTER_API_KEY` secret in Supabase |
-| Done | Save period snapshots | `handleSavePeriod` writes aggregated user metrics to `periods` + `period_users`; "Save period snapshot" button in Module 1; upserts by date range |
-| Done | Settings/initiatives persistence | `app_settings` key-value table; dashboard settings, initiatives, spend overrides auto-saved on change and restored on load |
-| Done | Delete policies | Full CRUD on all tables (`periods`, `period_users`, `uploads`, `document_chunks`, `app_settings`) |
-| Planned | Historical trend charts | WoW / MoM beyond saved periods |
+| Done | ingest-process Edge Function | Chunks + embeds all file types; also parses Anthropic CSV → `usage_rows` (Phase 3) |
+| Done | Save period snapshots | `handleSavePeriod` writes to `periods` + `period_users` + `period_model_breakdown` + `period_product_breakdown`; Code spend/tokens included |
+| Done | Settings/initiatives persistence | `app_settings` for settings/spend_overrides; `initiatives` table for Module 7 (Phase 3) |
+| Done | Delete policies | Full CRUD on all tables |
+| Done (code) | `usage_rows` table | Raw CSV rows for SQL analytics; migrations pending |
+| Done (code) | `seats` table | Replaces hardcoded USERS_MAP; dashboard loads seats from DB with fallback |
+| Done (code) | `period_model_breakdown` / `period_product_breakdown` | Normalised breakdown rows for trend SQL |
+| Done (code) | `initiatives` table | Row-level CRUD replaces app_settings JSONB blob for Module 7 |
+| Planned | Historical trend charts | WoW / MoM charts using period_model_breakdown |
+| Planned | usage_rows analytics | Day-level drill-down charts |
 | Planned | Auto-fetch Anthropic | API key in env |
 | Planned | Auto-email reports | M365 SMTP |
 | Planned | Auth hardening | Domain restriction at provider (hooks / allowlist) |

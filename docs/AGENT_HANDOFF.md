@@ -8,9 +8,9 @@
 
 ---
 
-## Current phase: Phase 2 COMPLETE
+## Current phase: Phase 3 — Schema hardening (code done, migrations pending)
 
-The persistence layer is fully operational. Everything is live, committed, and deployed.
+All code changes are committed. **6 SQL migrations still need to be applied** in the Supabase SQL Editor before the new tables are live. See `docs/schema-hardening-migrations.sql`.
 
 ---
 
@@ -24,37 +24,41 @@ The persistence layer is fully operational. Everything is live, committed, and d
 
 ### Supabase schema (all live, all verified)
 
-**7 migrations applied in order:**
+**7 Phase 2 migrations applied** (see previous history). **6 Phase 3 migrations pending** (run `docs/schema-hardening-migrations.sql` in Supabase SQL Editor).
 
-| Migration | What it added |
-|-----------|---------------|
-| `add_uploads_table_and_storage_bucket` | `uploads` table + private Storage bucket `uploads` (50 MiB) |
-| `add_periods_and_period_users_tables` | `periods` + `period_users` with FK cascade |
-| `add_anon_rls_policies_for_cloud_persistence` | Anon key access (no Magic Link required) |
-| `add_content_hash_to_uploads` | SHA-256 dedup column + unique partial index |
-| `add_vector_extension_and_document_chunks` | pgvector extension + `document_chunks` (vector(1536)) |
-| `add_delete_policies_for_periods` | DELETE on periods/period_users (needed for upsert-by-date) |
-| `add_app_settings_table` | Key-value table for settings, initiatives, spend overrides |
-
-**5 tables:**
+**Phase 2 tables (live):**
 
 | Table | Key columns | Notes |
 |-------|-------------|-------|
-| `uploads` | id, file_name, file_type, storage_path, file_size, uploaded_by, content_hash | SHA-256 dedup; unique partial index on content_hash |
-| `periods` | id, label, date_from, date_to | Reporting period metadata |
-| `period_users` | period_id→periods, email, total_spend_usd, total_tokens, opus_pct, fluency_score, model_breakdown (jsonb), product_breakdown (jsonb) | Per-user snapshot per period |
-| `document_chunks` | upload_id→uploads, chunk_index, chunk_text, embedding vector(1536), file_type, metadata | RAG; Edge Function writes here |
-| `app_settings` | key (PK), value (jsonb), updated_at | Keys: dashboard_settings, initiatives, spend_overrides |
+| `uploads` | id, file_name, file_type, storage_path, file_size, uploaded_by, content_hash, period_id | SHA-256 dedup; file_type CHECK; period_id FK (Migration 5) |
+| `periods` | id, label, date_from NOT NULL, date_to NOT NULL | date columns are NOT NULL after Migration 1 |
+| `period_users` | period_id→periods, email, total_spend_usd, total_tokens, opus_pct, fluency_score, model_breakdown (jsonb), product_breakdown (jsonb), code_spend_usd, code_tokens | code columns added by Migration 5 |
+| `document_chunks` | upload_id→uploads, chunk_index, chunk_text, embedding vector(1536), file_type, metadata | RAG; UNIQUE(upload_id, chunk_index) after Migration 1 |
+| `app_settings` | key (PK), value (jsonb), updated_at | Keys: dashboard_settings, spend_overrides (initiatives moved to own table) |
 
-**RLS policy pattern:** All tables have SELECT + INSERT for both `anon` and `authenticated`. `uploads`, `document_chunks`, `app_settings` have DELETE. `app_settings` also has UPDATE (needed for upsert). `periods` and `period_users` have DELETE (for re-saving same date range).
+**Phase 3 tables (pending migrations):**
+
+| Table | Purpose | Migration |
+|-------|---------|-----------|
+| `usage_rows` | Raw Anthropic CSV rows — all analytics without re-parsing | 2 |
+| `period_model_breakdown` | Normalised model mix per period/user | 3 |
+| `period_product_breakdown` | Normalised product mix per period/user | 3 |
+| `seats` | 8 users (replaces hardcoded USERS_MAP in index.html) | 4 |
+| `initiatives` | Module 7 rows (replaces app_settings JSONB blob) | 6 |
+
+**RLS policy pattern:** All tables have SELECT + INSERT + DELETE for both `anon` and `authenticated`. `app_settings` also has UPDATE. `seats` has full CRUD for authenticated, SELECT-only for anon.
 
 **Storage:** Private bucket `uploads`. Full CRUD policies for anon + authenticated on `storage.objects` where `bucket_id = 'uploads'`.
 
 ### Edge Function
 - **`ingest-process`** — ACTIVE, `verify_jwt: true`
 - Source: `supabase/functions/ingest-process/index.ts`
-- What it does: receives `{ upload_id }`, downloads file from Storage, chunks text (JSON-aware for conversations/projects/memories/users), calls OpenRouter `openai/text-embedding-3-small` for 1536-dim embeddings, deletes old chunks for upload_id, inserts new ones into `document_chunks`
-- Env vars needed: `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (auto-injected), `OPENROUTER_API_KEY` (set as secret in Supabase Dashboard — gracefully skips if missing)
+- What it does:
+  1. Downloads file from Storage
+  2. **If `anthropic-csv`**: parses CSV rows → inserts into `usage_rows` (runs without OpenRouter key)
+  3. Chunks text (JSON-aware for conversations/projects/memories/users)
+  4. Calls OpenRouter `openai/text-embedding-3-small` for 1536-dim embeddings → `document_chunks`
+- Env vars: `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (auto-injected), `OPENROUTER_API_KEY` (optional — skips embeddings if missing but still populates `usage_rows`)
 
 ---
 
@@ -94,15 +98,17 @@ Settings / initiatives / spend overrides:
 | `sha256HexFromUtf8` | ~539 | SHA-256 hash for content dedup |
 | `saveAppSetting` | ~539 | Fire-and-forget upsert to app_settings |
 | `persistIngestToSupabase` | ~548 | Dedup check → Storage upload → uploads insert → invoke RAG |
-| `aggregateData` | ~696 | Main aggregation: spend/tokens/fluency per user |
+| `aggregateData` | ~706 | Main aggregation: spend/tokens/fluency per user; accepts optional `seatsOverride` (5th arg) |
 | `buildBehaviorMaps` | ~643 | Conversation/project/memory signals per user |
-| Supabase init effects | ~2360–2410 | createClient, auth session, period_users fetch, uploads list fetch |
-| `app_settings` load effect | ~2482 | Fetch and hydrate settings/initiatives/spendOverrides |
-| `app_settings` save effects | ~2509–2522 | Auto-save on state change (guarded by settingsLoadedFromDbRef) |
-| `handleSavePeriod` | ~2619 | Write period snapshot to periods + period_users |
-| `invokeRagAfterUpload` | ~2405 | Calls ingest-process Edge Function after upload |
-| `persistToCloud` memo | ~2412 | Object passed to Module1 with supabase client + callbacks |
-| App JSX / module props | ~2780+ | All module props assembled here |
+| Supabase init effects | ~2360–2430 | createClient, auth session, period_users + period_model_breakdown fetch, uploads list, seats load |
+| `app_settings` load effect | ~2494 | Fetch and hydrate settings/spendOverrides (initiatives now from `initiatives` table) |
+| `initiatives` load effect | ~2519 | Fetch and hydrate `initiatives` table on startup |
+| `app_settings` save effects | ~2540–2550 | Auto-save dashboard_settings + spend_overrides (guarded by settingsLoadedFromDbRef) |
+| `handleSavePeriod` | ~2648 | Write period snapshot to periods + period_users + period_model_breakdown + period_product_breakdown |
+| `handleInitiativeAdd/Update/Delete` | ~2779–2820 | Row-level CRUD callbacks for initiatives table |
+| `invokeRagAfterUpload` | ~2460 | Calls ingest-process Edge Function after upload |
+| `persistToCloud` memo | ~2470 | Object passed to Module1 with supabase client + callbacks |
+| App JSX / module props | ~2840+ | All module props assembled here |
 
 ---
 
@@ -125,12 +131,19 @@ Create `dashboard-config.json` at repo root (gitignored):
 
 ---
 
-## What to build next (Phase 3 ideas)
+## What to build next
+
+### Immediate: apply migrations
+Run `docs/schema-hardening-migrations.sql` in Supabase SQL Editor (project `pwuapjdfrdbgcekrwlpr`). Run Migration 1 first, then 2–6 in order. Then redeploy the Edge Function (supabase functions deploy ingest-process).
+
+### After migrations are live
 
 | Priority | Feature | Notes |
 |----------|---------|-------|
-| High | Historical trend charts in Modules 2 + 4 | Infrastructure is ready (period_users has data); need chart UI |
-| High | IVFFlat vector index on document_chunks | Add once 100+ rows; currently commented out in sql file |
+| High | Historical trend charts in Modules 2 + 4 | `period_model_breakdown` + `period_users` are ready; need chart UI |
+| High | IVFFlat vector index on document_chunks | Add once 100+ rows |
+| Medium | `usage_rows` analytics charts | Day-level spend/model drill-down; data flows in via Edge Function after Anthropic CSV re-upload |
+| Medium | Seat management UI | `seats` table CRUD; add/remove seats without code deploy |
 | Medium | RAG query endpoint | Edge Function to search document_chunks by embedding similarity |
 | Medium | Auto-fetch Anthropic CSV | Anthropic admin API key in Railway env; scheduled fetch |
 | Low | Auto-email reports | M365 SMTP |
