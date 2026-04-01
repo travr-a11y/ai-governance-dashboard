@@ -109,3 +109,21 @@ create policy "storage_uploads_update_authenticated" on storage.objects
 
 -- Optional: restrict sign-ups to Frank domains via Supabase Dashboard → Authentication →
 -- Hooks or email templates. Client-side checks are not sufficient on their own.
+
+-- ─── Anon role (dashboard uses anon key; PIN-gated Admin tab is access control) ─
+-- Migration: add_anon_rls_policies_for_cloud_persistence — allows Storage + DB without Magic Link.
+
+create policy "uploads_select_anon" on public.uploads for select to anon using (true);
+create policy "uploads_insert_anon" on public.uploads for insert to anon with check (true);
+create policy "uploads_delete_anon" on public.uploads for delete to anon using (true);
+
+create policy "periods_select_anon" on public.periods for select to anon using (true);
+create policy "periods_insert_anon" on public.periods for insert to anon with check (true);
+
+create policy "period_users_select_anon" on public.period_users for select to anon using (true);
+create policy "period_users_insert_anon" on public.period_users for insert to anon with check (true);
+
+create policy "storage_uploads_select_anon" on storage.objects for select to anon using (bucket_id = 'uploads');
+create policy "storage_uploads_insert_anon" on storage.objects for insert to anon with check (bucket_id = 'uploads');
+create policy "storage_uploads_update_anon" on storage.objects for update to anon using (bucket_id = 'uploads');
+create policy "storage_uploads_delete_anon" on storage.objects for delete to anon using (bucket_id = 'uploads');
