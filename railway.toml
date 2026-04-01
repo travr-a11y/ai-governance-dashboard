@@ -1,5 +1,5 @@
 [deploy]
-startCommand = "npx serve . --listen $PORT --no-clipboard"
+startCommand = "npm start"
 healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"

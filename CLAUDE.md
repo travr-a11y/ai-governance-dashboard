@@ -2,11 +2,11 @@
 
 ## Project status
 
-**Phase 1.5: COMPLETE (code).** Dashboard remains a pure static site on Railway. Enhanced data ingestion (Claude.ai export JSON + Claude Code team CSV), Frank Group brand colours, multi-signal fluency when conversations are loaded, seat tiers, Module 7/8 order fix, Word/PDF-friendly report export, and Module 9 coaching + leaderboard.
+**Phase 2: LIVE.** Supabase persistence is operational. DB tables (`uploads`, `periods`, `period_users`) and Storage bucket (`uploads`) are live in project `pwuapjdfrdbgcekrwlpr`. `railway.toml` now runs `npm start` so `prestart` writes `dashboard-config.json` from env vars before serving.
 
 - GitHub: `https://github.com/travr-a11y/ai-governance-dashboard`
 - Railway: connect at railway.app → `travr-a11y/ai-governance-dashboard` (auto-deploys on push to main)
-- Phase 2 (Supabase) is in progress — raw uploads + manifest; saved periods; see bottom of this file.
+- **Railway action required:** Set `SUPABASE_URL` + `SUPABASE_ANON_KEY` in Railway → Variables (see `docs/DEPLOYMENT.md`).
 
 ---
 

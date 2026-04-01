@@ -27,7 +27,7 @@
 | Done | Supabase MCP connected to project `pwuapjdfrdbgcekrwlpr` |
 | Done | DB schema: `uploads` + RLS (migration `add_uploads_table_and_storage_bucket`); `periods` / `period_users` unchanged from prior SQL |
 | Done | Storage bucket `uploads` + authenticated policies (same migration) |
-| Local / Railway | Local: create gitignored `dashboard-config.json`. Railway: set `SUPABASE_URL` + `SUPABASE_ANON_KEY` — `npm prestart` writes the file (see `DEPLOYMENT.md`, `PHASE2_SHIP_AND_OPERATIONS_CHECKLIST.md`) |
+| ✅ Local done | Local `dashboard-config.json` created (gitignored). `railway.toml` fixed to `npm start` so prestart runs. **Railway:** still need to set `SUPABASE_URL` + `SUPABASE_ANON_KEY` in Railway → Variables. |
 | Done | Persist each successful ingest to Storage + `uploads` row (signed-in admin) |
 | Done | Auto-load latest stored file per `file_type` after sign-in |
 | Done | Module 1 upload history UI (list / refresh / load / delete) |
