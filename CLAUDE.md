@@ -55,7 +55,7 @@ Pure static site. Zero build step. No backend.
 - **Babel standalone** compiles JSX in-browser at load time
 - All data processing is client-side (FileReader API + inline CSV/JSON parsers)
 - No localStorage, no sessionStorage
-- **Optional Phase 2:** Supabase (`@supabase/supabase-js` from esm.sh) — Magic Link auth (Frank domains), `periods` / `period_users` snapshots, private Storage bucket `uploads` + `uploads` table manifest; successful ingests persist when signed in; auto-load latest file per `file_type` on login; Module 1 upload history (load/delete). Config: repo-root `dashboard-config.json` (gitignored); template `dashboard-config.example.json`. Railway: set `SUPABASE_URL` + `SUPABASE_ANON_KEY` (and optionally `OPENROUTER_API_KEY`) — `prestart` writes non-empty keys into that file before `serve` (see `docs/DEPLOYMENT.md`, `docs/PHASE2_SHIP_AND_OPERATIONS_CHECKLIST.md`). Project ref: `pwuapjdfrdbgcekrwlpr`.
+- **Optional Phase 2:** Supabase (`@supabase/supabase-js` from esm.sh) — anon key + RLS (`anon` + `authenticated` policies); `periods` / `period_users` snapshots, private Storage bucket `uploads` + `uploads` table manifest; successful ingests persist when Supabase is configured (no Magic Link required; optional session still sets `uploaded_by`); auto-load latest file per `file_type` on load; Module 1 upload history (load/delete). Config: repo-root `dashboard-config.json` (gitignored); template `dashboard-config.example.json`. Railway: set `SUPABASE_URL` + `SUPABASE_ANON_KEY` (and optionally `OPENROUTER_API_KEY`) — `prestart` writes non-empty keys into that file before `serve` (see `docs/DEPLOYMENT.md`, `docs/PHASE2_SHIP_AND_OPERATIONS_CHECKLIST.md`). Project ref: `pwuapjdfrdbgcekrwlpr`.
 - **Optional:** `fetch` to `https://api.frankfurter.app/latest?from=USD&to=AUD` when the user clicks **Refresh live** on the AUD/USD rate (CORS-friendly, no API key)
 - **Optional:** Module 8 **Generate with Gemini** — OpenRouter API key from Railway env (`OPENROUTER_API_KEY` → `dashboard-config.json`), user paste (session), or local `OPENROUTER_REPORT_API_KEY` in a trusted private copy only; `fetch` to `https://openrouter.ai/api/v1/chat/completions` with model `google/gemini-2.5-pro`. **Generate template report** works without a key. Template report stays fully client-side. **Note:** Any key in `dashboard-config.json` is exposed to everyone who can load the deployed site — treat Railway + access control accordingly.
 
@@ -189,7 +189,7 @@ git push origin main
 ## Known issues / open questions
 
 - `dashboard.jsx` uses ES imports — not runnable without a bundler; dev reference. Live app is `index.html`.
-- Spend limits and initiatives do not persist across reload (export JSON for initiatives). Raw exports persist in Supabase when configured and signed in.
+- Spend limits and initiatives do not persist across reload (export JSON for initiatives). Raw exports persist in Supabase when configured (anon key + env).
 - Multi-signal fluency applies org-wide once conversation export is present; users without mapped conversations get a low conversation signal until their UUIDs appear in `users.json` or `UUID_MAP_BASE`.
 
 ---
