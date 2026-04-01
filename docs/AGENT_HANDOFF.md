@@ -145,6 +145,7 @@ Create `dashboard-config.json` at repo root (gitignored):
 
 ## Recent changes
 
+- **UI Iteration 2 Part B (2026-04-02):** Structure + features — Model Efficiency moved to top of Module 3; pie chart label→Legend fix; Opus/Haiku recolored (navy/amber); token-based ROI formula (AVG_TOKENS_PER_SESSION=8000, 3× cap); 3 new Admin panels (ROI Settings, Seat Configuration, Team Members); Tools tab added with Savings Calculator; ROI_PRESETS constant removed; aggregateData extended for team_overrides + seat_overrides.
 - **UI Iteration 2 Part A (2026-04-02):** Presentation layer — "Frank Capital" sub-title, demo pill removed, A$ commas + Log a Win button, Model Efficiency removed from Module 2, "How calculated?" moved below tier cards, first names globally, brand-palette bar colors in Module 5, Coaching before Report Generator, OpenRouter paste input removed, new tier-based nudge copy.
 
 ## UI redesign (latest change)

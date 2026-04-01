@@ -6,6 +6,21 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import ReactDOM from "react-dom/client";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineChart, Line, Legend, CartesianGrid, PieChart, Pie } from "recharts";
+  if (!window.__DASHBOARD_READY__) {
+    var el = document.getElementById("root");
+    if (el) {
+      el.innerHTML = "<div style=\"padding:24px;font-family:system-ui,Segoe UI,sans-serif;max-width:560px;margin:2rem auto;border:1px solid #e11d48;background:#fef2f2;color:#881337;border-radius:8px\"><strong>Dashboard failed to load</strong><p style=\"margin-top:12px\">A required script (React, ReactDOM, PropTypes, or Recharts) did not load. Recharts UMD requires <code>PropTypes</code> before Recharts.</p><p style=\"margin-top:8px;font-size:13px\">Check the browser console and network tab for blocked CDN requests.</p></div>";
+    }
+    return;
+  }
+    const {
+      useState, useCallback, useMemo, useEffect
+    } = React;
+
+    const {
+      PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis,
+      Tooltip, ResponsiveContainer, Legend, LineChart, Line, CartesianGrid
+    } = Recharts;
 
     // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -24,14 +39,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
       Object.keys(USERS_MAP).map(k => [k.toLowerCase(), k])
     );
 
-    const ROI_PRESETS = {
-      legal:    { timeSavingPct: 0.40 },
-      finance:  { timeSavingPct: 0.35 },
-      advisory: { timeSavingPct: 0.30 },
-    };
-    const ROI_DEFAULT_SAVING_PCT = 0.30;
-    const ROI_MINS_PER_REQUEST   = 20;
-    const ROI_HOURLY_RATE_AUD    = 200;
+    const AVG_TOKENS_PER_SESSION = 8000; // typical professional task session
 
     const SPEND_LIMITS = {
       "alex@frankadvisory.com.au":    null,
@@ -92,9 +100,9 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
     }
 
     const COLOURS = {
-      opus:           "#e74c3c",
+      opus:           "#1e1645",
       sonnet:         "#88aa00",
-      haiku:          "#2563eb",
+      haiku:          "#f59e0b",
       advisory:       "#1e1645",
       law:            "#1e1645",
       accent:         "#88aa00",
@@ -695,14 +703,25 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
 
     // ─── Aggregation ──────────────────────────────────────────────────────────────
 
-    function aggregateData(rows, audRate, behavior, codeRow, seatsOverride = null) {
+    function aggregateData(rows, audRate, behavior, codeRow, seatsOverride = null, teamOverrides = [], seatOverrides = {}) {
       // Build lookup maps: prefer seatsOverride (from DB) when available, else fall back to hardcoded constants
-      const usersMap = seatsOverride
+      let usersMap = seatsOverride
         ? Object.fromEntries(seatsOverride.map(s => [s.email, {
             name: s.display_name, entity: s.entity, seatTier: s.seat_tier,
-            spendLimit: s.spend_limit_aud, isBenchmark: s.is_benchmark,
+            spendLimit: s.spend_limit_aud, isBenchmark: s.is_benchmark, roleType: s.role_type,
           }]))
-        : USERS_MAP;
+        : { ...USERS_MAP };
+      // Apply team_overrides: merge on top of usersMap
+      for (const t of (teamOverrides || [])) {
+        if (t.active === false) { delete usersMap[t.email]; continue; }
+        usersMap[t.email] = {
+          ...(usersMap[t.email] || {}),
+          name: t.name || usersMap[t.email]?.name || t.email,
+          entity: t.entity || usersMap[t.email]?.entity || 'Frank Advisory',
+          roleType: t.roleType || usersMap[t.email]?.roleType || 'advisory',
+          seatTier: t.tier || usersMap[t.email]?.seatTier || 'Standard',
+        };
+      }
       const lowerEmailToKey = Object.fromEntries(Object.keys(usersMap).map(k => [k.toLowerCase(), k]));
       const seatTierMap = seatsOverride
         ? Object.fromEntries(seatsOverride.map(s => [s.email, s.seat_tier]))
@@ -814,9 +833,10 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
           else if (u.email.toLowerCase().includes("franklaw")) entity = "Frank Law";
           else entity = "Unknown Entity";
         }
-        const seatTier = seatTierMap[emailKey] || info?.seatTier || "Standard";
+        const seatTier = (seatOverrides && seatOverrides[emailKey]) || seatTierMap[emailKey] || info?.seatTier || "Standard";
+        const roleType = info?.roleType || "advisory";
         return {
-          email: u.email, name: info?.name || u.email, entity, isBenchmark: info?.isBenchmark || false,
+          email: u.email, name: info?.name || u.email, entity, isBenchmark: info?.isBenchmark || false, roleType,
           totalSpendUSD: u.totalSpendUSD, totalSpendAUD: spendAUD,
           totalPromptTokens: u.totalPromptTokens, totalCompletionTokens: u.totalCompletionTokens,
           totalTokens, totalRequests: u.totalRequests,
@@ -928,6 +948,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
       const tabs = [
         { id: "dashboard", label: "Dashboard" },
         { id: "admin", label: "Admin" },
+        { id: "tools", label: "Tools" },
       ];
       return React.createElement("div", {
         style: {
@@ -1133,6 +1154,11 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
       const [error, setError] = useState(null);
       const [ingestNote, setIngestNote] = useState(null);
       const [duplicateWarnings, setDuplicateWarnings] = useState([]);
+      const [showRoiSettings, setShowRoiSettings] = useState(false);
+      const [showRoiTasks, setShowRoiTasks] = useState(false);
+      const [showSeatConfig, setShowSeatConfig] = useState(false);
+      const [showTeamMembers, setShowTeamMembers] = useState(false);
+      const [newMember, setNewMember] = useState(null);
 
       const readFileText = useCallback(file => new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -1425,6 +1451,272 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
             )
           );
         })(),
+        // ── ROI Settings panel ────────────────────────────────────────────────
+        React.createElement("div", { style:{ marginTop:16 } },
+          React.createElement("div", {
+            onClick: () => setShowRoiSettings(v => !v),
+            style:{ display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer", padding:"8px 14px", background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius: showRoiSettings ? "6px 6px 0 0" : 6, userSelect:"none" }
+          },
+            React.createElement("span", { style:{ fontWeight:600, fontSize:13 } }, "\u2699\ufe0f ROI Settings"),
+            React.createElement("span", { style:{ fontSize:12, color:"#9ca3af" } }, showRoiSettings ? "\u25b2 Collapse" : "\u25bc Expand")
+          ),
+          showRoiSettings && React.createElement("div", { style:{ border:"1px solid #e2e8f0", borderTop:"none", borderRadius:"0 0 6px 6px", padding:"14px 16px", background:"#fff" } },
+            React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:10, marginBottom:12 } },
+              ...[
+                ["Hourly Rate (A$/hr)", "roiHourlyRate", 50, 1000, 10, false],
+                ["Avg Minutes per Task", "roiMinutesPerTask", 5, 120, 5, false],
+                ["Legal saving %", "roiSavingLegal", 1, 100, 1, true],
+                ["Finance saving %", "roiSavingFinance", 1, 100, 1, true],
+                ["Advisory saving %", "roiSavingAdvisory", 1, 100, 1, true],
+              ].map(([label, key, min, max, step, isPct]) =>
+                React.createElement("div", { key, style:{ display:"flex", flexDirection:"column", gap:4 } },
+                  React.createElement("label", { style:{ fontSize:12, fontWeight:600, color:"#374151" } }, label),
+                  React.createElement("input", {
+                    type:"number", min, max, step,
+                    value: isPct ? Math.round((settings[key]||0)*100) : (settings[key]||0),
+                    onChange: e => {
+                      const v = parseFloat(e.target.value);
+                      onSettings({ [key]: isPct ? v/100 : v });
+                    },
+                    style:{ border:"1px solid #d1d5db", borderRadius:6, padding:"6px 8px", fontSize:13 }
+                  })
+                )
+              )
+            ),
+            React.createElement("p", { style:{ fontSize:11, fontStyle:"italic", color:"#6b7280", marginBottom:10 } },
+              "Benchmarks: Legal 40% (HBS/BCG/Stanford), Finance 35% (GitHub Copilot RCT), Advisory 40% (BCG Cyborg study). Replace with your own data as you log tasks."
+            ),
+            React.createElement("button", { type:"button", onClick:()=>setShowRoiTasks(v=>!v),
+              style:{ fontSize:12, color:"#2563eb", background:"none", border:"none", cursor:"pointer", padding:0, textDecoration:"underline" }
+            }, showRoiTasks ? "Hide task categories" : "View task categories"),
+            showRoiTasks && React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:12, fontSize:12, marginTop:8 } },
+              ...[
+                ["Legal", ["Contract Review / Issue Spotting","Redlining / Markup Drafting","Legal Research / Case Summary","Due Diligence Document Review","First-Pass Legal Drafting"]],
+                ["Finance", ["Financial Model Structuring","Data Room / Financial Doc Review","Investment Memo / IC Paper Drafting"]],
+                ["Advisory", ["Market Research Synthesis","Strategy / Hypothesis Generation","Deck / Client Report Drafting","Workshop / Meeting Prep"]],
+              ].map(([group, tasks]) =>
+                React.createElement("div", { key:group },
+                  React.createElement("div", { style:{ fontWeight:600, color:"#374151", marginBottom:4 } }, group),
+                  React.createElement("ul", { style:{ paddingLeft:16, color:"#6b7280", lineHeight:1.8, margin:0 } },
+                    ...tasks.map((t,i) => React.createElement("li", { key:i }, t))
+                  )
+                )
+              )
+            )
+          )
+        ),
+        // ── Seat Configuration panel ──────────────────────────────────────────
+        React.createElement("div", { style:{ marginTop:12 } },
+          React.createElement("div", {
+            onClick: () => setShowSeatConfig(v => !v),
+            style:{ display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer", padding:"8px 14px", background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius: showSeatConfig ? "6px 6px 0 0" : 6, userSelect:"none" }
+          },
+            React.createElement("span", { style:{ fontWeight:600, fontSize:13 } }, "\uD83D\uDCBA Seat Configuration"),
+            React.createElement("span", { style:{ fontSize:12, color:"#9ca3af" } }, showSeatConfig ? "\u25b2 Collapse" : "\u25bc Expand")
+          ),
+          showSeatConfig && React.createElement("div", { style:{ border:"1px solid #e2e8f0", borderTop:"none", borderRadius:"0 0 6px 6px", padding:"14px 16px", background:"#fff" } },
+            React.createElement("p", { style:{ fontSize:12, color:"#6b7280", marginBottom:10 } }, "Override seat tier per user. Changes affect cost calculations immediately."),
+            React.createElement("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:13 } },
+              React.createElement("thead", null,
+                React.createElement("tr", { style:{ background:"#f1f5f9" } },
+                  ...["User","Email","Tier"].map(h =>
+                    React.createElement("th", { key:h, style:{ textAlign:"left", padding:"6px 10px", fontWeight:600, color:"#6b7280" } }, h)
+                  )
+                )
+              ),
+              React.createElement("tbody", null,
+                ...Object.entries(USERS_MAP).map(([email, u]) => {
+                  const overrides = settings.seat_overrides || {};
+                  const current = overrides[email] || SEAT_TIERS[email] || "Standard";
+                  return React.createElement("tr", { key:email, style:{ borderBottom:"1px solid #f3f4f6" } },
+                    React.createElement("td", { style:{ padding:"5px 10px" } }, u.name.split(' ')[0]),
+                    React.createElement("td", { style:{ padding:"5px 10px", color:"#6b7280", fontSize:12 } }, email),
+                    React.createElement("td", { style:{ padding:"5px 10px" } },
+                      React.createElement("select", {
+                        value: current,
+                        onChange: e => onSettings({ seat_overrides: { ...(settings.seat_overrides||{}), [email]: e.target.value } }),
+                        style:{ border:"1px solid #d1d5db", borderRadius:4, padding:"3px 6px", fontSize:12 }
+                      },
+                        React.createElement("option", { value:"Standard" }, "Standard"),
+                        React.createElement("option", { value:"Premium" }, "Premium")
+                      )
+                    )
+                  );
+                })
+              )
+            )
+          )
+        ),
+        // ── Team Members panel ────────────────────────────────────────────────
+        React.createElement("div", { style:{ marginTop:12 } },
+          React.createElement("div", {
+            onClick: () => setShowTeamMembers(v => !v),
+            style:{ display:"flex", alignItems:"center", justifyContent:"space-between", cursor:"pointer", padding:"8px 14px", background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius: showTeamMembers ? "6px 6px 0 0" : 6, userSelect:"none" }
+          },
+            React.createElement("span", { style:{ fontWeight:600, fontSize:13 } }, "\uD83D\uDC65 Team Members"),
+            React.createElement("span", { style:{ fontSize:12, color:"#9ca3af" } }, showTeamMembers ? "\u25b2 Collapse" : "\u25bc Expand")
+          ),
+          showTeamMembers && React.createElement("div", { style:{ border:"1px solid #e2e8f0", borderTop:"none", borderRadius:"0 0 6px 6px", padding:"14px 16px", background:"#fff" } },
+            React.createElement("p", { style:{ fontSize:12, color:"#6b7280", marginBottom:10 } }, "Edit the team roster. Overrides merge over the built-in user map. Unknown emails from CSV uploads are auto-added here."),
+            (() => {
+              const overrides = settings.team_overrides || [];
+              // Merged view: built-in users + overrides
+              const baseEntries = Object.entries(USERS_MAP).map(([email, u]) => {
+                const ov = overrides.find(t => t.email === email) || {};
+                return { email, name: ov.name||u.name, entity: ov.entity||u.entity, roleType: ov.roleType||u.roleType||'advisory', tier: ov.tier||SEAT_TIERS[email]||'Standard', active: ov.active !== false, isBase: true };
+              });
+              const extraEntries = overrides.filter(t => !USERS_MAP[t.email]);
+              const allEntries = [...baseEntries, ...extraEntries];
+              const updateEntry = (email, patch) => {
+                const existing = overrides.find(t => t.email === email);
+                if (existing) {
+                  onSettings({ team_overrides: overrides.map(t => t.email === email ? { ...t, ...patch } : t) });
+                } else {
+                  const base = USERS_MAP[email] || {};
+                  onSettings({ team_overrides: [...overrides, { email, name: base.name||email, entity: base.entity||'Frank Advisory', roleType: base.roleType||'advisory', tier: 'Standard', active: true, ...patch }] });
+                }
+              };
+              const removeEntry = (email) => {
+                const isBase = !!USERS_MAP[email];
+                if (isBase) {
+                  updateEntry(email, { active: false });
+                } else {
+                  onSettings({ team_overrides: overrides.filter(t => t.email !== email) });
+                }
+              };
+              return React.createElement(React.Fragment, null,
+                React.createElement("div", { style:{ overflowX:"auto" } },
+                  React.createElement("table", { style:{ width:"100%", borderCollapse:"collapse", fontSize:12, minWidth:600 } },
+                    React.createElement("thead", null,
+                      React.createElement("tr", { style:{ background:"#f1f5f9" } },
+                        ...["Name","Email","Entity","Role","Tier","Active",""].map(h =>
+                          React.createElement("th", { key:h, style:{ textAlign:"left", padding:"6px 8px", fontWeight:600, color:"#6b7280", whiteSpace:"nowrap" } }, h)
+                        )
+                      )
+                    ),
+                    React.createElement("tbody", null,
+                      ...allEntries.map(entry =>
+                        React.createElement("tr", { key:entry.email, style:{ borderBottom:"1px solid #f3f4f6", opacity: entry.active===false ? 0.5 : 1 } },
+                          React.createElement("td", { style:{ padding:"4px 8px" } },
+                            React.createElement("input", {
+                              value: entry.name, size:14,
+                              onChange: e => updateEntry(entry.email, { name: e.target.value }),
+                              style:{ border:"1px solid #e5e7eb", borderRadius:4, padding:"3px 6px", fontSize:12, width:"100%" }
+                            })
+                          ),
+                          React.createElement("td", { style:{ padding:"4px 8px", color:"#6b7280", fontSize:11, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" } }, entry.email),
+                          React.createElement("td", { style:{ padding:"4px 8px" } },
+                            React.createElement("select", { value: entry.entity,
+                              onChange: e => updateEntry(entry.email, { entity: e.target.value }),
+                              style:{ border:"1px solid #e5e7eb", borderRadius:4, padding:"3px 4px", fontSize:12 }
+                            },
+                              React.createElement("option", null, "Frank Advisory"),
+                              React.createElement("option", null, "Frank Law"),
+                              React.createElement("option", null, "Frank Capital")
+                            )
+                          ),
+                          React.createElement("td", { style:{ padding:"4px 8px" } },
+                            React.createElement("select", { value: entry.roleType||'advisory',
+                              onChange: e => updateEntry(entry.email, { roleType: e.target.value }),
+                              style:{ border:"1px solid #e5e7eb", borderRadius:4, padding:"3px 4px", fontSize:12 }
+                            },
+                              React.createElement("option", { value:"advisory" }, "Advisory"),
+                              React.createElement("option", { value:"finance" }, "Finance"),
+                              React.createElement("option", { value:"legal" }, "Legal")
+                            )
+                          ),
+                          React.createElement("td", { style:{ padding:"4px 8px" } },
+                            React.createElement("select", { value: entry.tier||'Standard',
+                              onChange: e => updateEntry(entry.email, { tier: e.target.value }),
+                              style:{ border:"1px solid #e5e7eb", borderRadius:4, padding:"3px 4px", fontSize:12 }
+                            },
+                              React.createElement("option", null, "Standard"),
+                              React.createElement("option", null, "Premium")
+                            )
+                          ),
+                          React.createElement("td", { style:{ padding:"4px 8px", textAlign:"center" } },
+                            React.createElement("input", { type:"checkbox", checked: entry.active !== false,
+                              onChange: e => updateEntry(entry.email, { active: e.target.checked }),
+                              style:{ cursor:"pointer" }
+                            })
+                          ),
+                          React.createElement("td", { style:{ padding:"4px 8px" } },
+                            React.createElement("button", { type:"button",
+                              onClick: () => removeEntry(entry.email),
+                              style:{ background:"none", border:"1px solid #fca5a5", borderRadius:4, padding:"2px 8px", fontSize:11, color:"#dc2626", cursor:"pointer" }
+                            }, entry.active===false ? "Restore" : "Remove")
+                          )
+                        )
+                      )
+                    )
+                  )
+                ),
+                React.createElement("div", { style:{ marginTop:10 } },
+                  newMember === null
+                    ? React.createElement("button", { type:"button",
+                        onClick: () => setNewMember({ email:'', name:'', entity:'Frank Advisory', roleType:'advisory', tier:'Standard', active:true }),
+                        style:{ fontSize:12, background:COLOURS.advisory, color:"#fff", border:"none", borderRadius:6, padding:"6px 14px", cursor:"pointer", fontWeight:600 }
+                      }, "+ Add member")
+                    : React.createElement("div", { style:{ background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:6, padding:"12px", marginTop:8 } },
+                        React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:8, marginBottom:8 } },
+                          ...[["email","Email (required)","email"],["name","Name","text"]].map(([k,lbl,t]) =>
+                            React.createElement("div", { key:k },
+                              React.createElement("label", { style:{ fontSize:11, fontWeight:600, color:"#374151", display:"block", marginBottom:2 } }, lbl),
+                              React.createElement("input", { type:t, value:newMember[k],
+                                onChange: e => setNewMember(m => ({ ...m, [k]: e.target.value })),
+                                style:{ border:"1px solid #d1d5db", borderRadius:4, padding:"4px 7px", fontSize:12, width:"100%" }
+                              })
+                            )
+                          ),
+                          React.createElement("div", null,
+                            React.createElement("label", { style:{ fontSize:11, fontWeight:600, color:"#374151", display:"block", marginBottom:2 } }, "Entity"),
+                            React.createElement("select", { value:newMember.entity, onChange:e=>setNewMember(m=>({...m,entity:e.target.value})),
+                              style:{ border:"1px solid #d1d5db", borderRadius:4, padding:"4px 6px", fontSize:12 }
+                            },
+                              React.createElement("option", null, "Frank Advisory"),
+                              React.createElement("option", null, "Frank Law"),
+                              React.createElement("option", null, "Frank Capital")
+                            )
+                          ),
+                          React.createElement("div", null,
+                            React.createElement("label", { style:{ fontSize:11, fontWeight:600, color:"#374151", display:"block", marginBottom:2 } }, "Role"),
+                            React.createElement("select", { value:newMember.roleType, onChange:e=>setNewMember(m=>({...m,roleType:e.target.value})),
+                              style:{ border:"1px solid #d1d5db", borderRadius:4, padding:"4px 6px", fontSize:12 }
+                            },
+                              React.createElement("option", { value:"advisory" }, "Advisory"),
+                              React.createElement("option", { value:"finance" }, "Finance"),
+                              React.createElement("option", { value:"legal" }, "Legal")
+                            )
+                          ),
+                          React.createElement("div", null,
+                            React.createElement("label", { style:{ fontSize:11, fontWeight:600, color:"#374151", display:"block", marginBottom:2 } }, "Tier"),
+                            React.createElement("select", { value:newMember.tier, onChange:e=>setNewMember(m=>({...m,tier:e.target.value})),
+                              style:{ border:"1px solid #d1d5db", borderRadius:4, padding:"4px 6px", fontSize:12 }
+                            },
+                              React.createElement("option", null, "Standard"),
+                              React.createElement("option", null, "Premium")
+                            )
+                          )
+                        ),
+                        React.createElement("div", { style:{ display:"flex", gap:8 } },
+                          React.createElement("button", { type:"button",
+                            onClick: () => {
+                              if (!newMember.email) return;
+                              onSettings({ team_overrides: [...(settings.team_overrides||[]), { ...newMember }] });
+                              setNewMember(null);
+                            },
+                            style:{ background:COLOURS.advisory, color:"#fff", border:"none", borderRadius:6, padding:"6px 14px", fontSize:12, cursor:"pointer", fontWeight:600 }
+                          }, "Add"),
+                          React.createElement("button", { type:"button", onClick:()=>setNewMember(null),
+                            style:{ background:"#fff", color:"#374151", border:"1px solid #d1d5db", borderRadius:6, padding:"6px 14px", fontSize:12, cursor:"pointer" }
+                          }, "Cancel")
+                        )
+                      )
+                )
+              );
+            })()
+          )
+        ),
         error && React.createElement("div", { style:{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6, padding:"10px 14px", fontSize:13, color:"#dc2626", marginBottom:12 } },
           React.createElement("strong", null, "Error: "), error
         ),
@@ -1584,16 +1876,23 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LineCh
         }, "\u26a0 Showing sample data \u2014 upload a CSV in Data Ingestion to see your team's real data"),
         React.createElement(SectionHeader, { title:"Model Governance" }),
         React.createElement("p", { style:{ margin:"2px 0 12px", fontSize:13, color:"#4a4a4a", fontWeight:400 } }, "Which AI models the team is using \u2014 and whether they're choosing the right tool for each job."),
+        React.createElement("div", { style:{ background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:6, padding:"8px 14px", marginBottom:14, fontSize:13, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" } },
+          React.createElement("span", { style:{ fontWeight:600, color:"#6b7280" } }, "Model Efficiency:"),
+          React.createElement("span", { style:{ fontWeight:700, color:COLOURS.advisory } },
+            `${fmtDec(metrics.org_opus_pct,0)}% Opus\u2002/\u2002${fmtDec(metrics.org_sonnet_pct,0)}% Sonnet\u2002/\u2002${fmtDec(metrics.org_haiku_pct,0)}% Haiku`),
+          React.createElement("span", { style:{ fontSize:11, color: metrics.org_opus_pct > 80 ? "#dc2626" : metrics.org_opus_pct > 50 ? "#f59e0b" : "#166534", marginLeft:"auto" } },
+            metrics.org_opus_pct > 80 ? "\u2691 Review recommended" : metrics.org_opus_pct > 50 ? "\u25c6 Moderate" : "\u2713 Balanced")
+        ),
         React.createElement("div", { className:"m3-grid", style:{ display:"grid", gridTemplateColumns:"220px 1fr", gap:24, marginBottom:12 } },
           React.createElement("div", null,
             React.createElement("div", { style:{ fontSize:12, fontWeight:600, color:"#6b7280", marginBottom:8, textAlign:"center" } }, "Org-wide Model Split"),
-            React.createElement(ResponsiveContainer, { width:"100%", height:180 },
+            React.createElement(ResponsiveContainer, { width:"100%", height:220 },
               React.createElement(PieChart, null,
-                React.createElement(Pie, { data:pieData, cx:"50%", cy:"50%", outerRadius:75, dataKey:"value",
-                  label:({name,value}) => `${name} ${fmtDec(value,0)}%`, labelLine:false, fontSize:11 },
+                React.createElement(Pie, { data:pieData, cx:"50%", cy:"45%", outerRadius:70, dataKey:"value" },
                   ...pieData.map(e => React.createElement(Cell, { key:e.name, fill:COLOURS[e.name.toLowerCase()]||"#ccc" }))
                 ),
-                React.createElement(Tooltip, { formatter:v => `${fmtDec(v,1)}%` })
+                React.createElement(Tooltip, { formatter:v => `${fmtDec(v,1)}%` }),
+                React.createElement(Legend, { wrapperStyle:{ fontSize:11 } })
               )
             )
           ),
@@ -2543,7 +2842,7 @@ Generated by Frank Group AI Governance Dashboard`);
       const [fileName, setFileName]     = useState(null);
       const [dateRange, setDateRange]   = useState(null);
       const [dataInfo, setDataInfo]     = useState(null);
-      const [settings, setSettings]     = useState({ audRate:1.55, opusSonnetRatio:5, totalSeats:8 });
+      const [settings, setSettings]     = useState({ audRate:1.55, opusSonnetRatio:5, totalSeats:8, roiHourlyRate:200, roiMinutesPerTask:20, roiSavingLegal:0.40, roiSavingFinance:0.35, roiSavingAdvisory:0.40, seat_overrides:{}, team_overrides:[] });
       const [initiatives, setInitiatives] = useState(DEFAULT_INITIATIVES);
       const [spendOverrides, setSpendOverrides] = useState({});
       const [convItems, setConvItems]   = useState([]);
@@ -2676,6 +2975,7 @@ Generated by Frank Group AI Governance Dashboard`);
             if (cancelled) return;
             if (!error && data?.length) {
               setAvailablePeriods(data);
+              // Auto-select the most recent period on first load
               setDateRangeFrom(prev => prev || data[0].date_from);
               setDateRangeTo(prev => prev || data[0].date_to);
               setSelectedPeriodId(prev => prev || data[0].id);
@@ -2821,7 +3121,7 @@ Generated by Frank Group AI Governance Dashboard`);
       const isSampleData = !rawRows && !usageRowsData;
 
       const liveUsersBase = useMemo(() => {
-        const agg = aggregateData(rows, settings.audRate, behavior, codeData, seatsFromDb);
+        const agg = aggregateData(rows, settings.audRate, behavior, codeData, seatsFromDb, settings.team_overrides || [], settings.seat_overrides || {});
         return agg.map(u => {
           if (spendOverrides[u.email] !== undefined) {
             const limit = spendOverrides[u.email];
@@ -2829,15 +3129,21 @@ Generated by Frank Group AI Governance Dashboard`);
           }
           return u;
         });
-      }, [rows, settings.audRate, spendOverrides, behavior, codeData]);
+      }, [rows, settings.audRate, settings.team_overrides, settings.seat_overrides, spendOverrides, behavior, codeData, seatsFromDb]);
 
       const users = liveUsersBase;
 
       const estHoursSaved = users.reduce((acc, u) => {
-        const preset = ROI_PRESETS[USERS_MAP[u.email]?.roleType] || { timeSavingPct: ROI_DEFAULT_SAVING_PCT };
-        return acc + (u.totalRequests * ROI_MINS_PER_REQUEST * preset.timeSavingPct / 60);
+        const roleType = u.roleType || USERS_MAP[u.email]?.roleType || 'advisory';
+        const roleKey = 'roiSaving' + roleType.charAt(0).toUpperCase() + roleType.slice(1);
+        const roleSaving = settings[roleKey] != null ? settings[roleKey] : 0.35;
+        const estimatedSessions = Math.min(
+          u.totalTokens > 0 ? u.totalTokens / AVG_TOKENS_PER_SESSION : 0,
+          3 * u.totalRequests
+        );
+        return acc + (estimatedSessions * (settings.roiMinutesPerTask || 20) * roleSaving / 60);
       }, 0);
-      const estValueAUD    = estHoursSaved * ROI_HOURLY_RATE_AUD;
+      const estValueAUD = estHoursSaved * (settings.roiHourlyRate || 200);
       const activeUserCount = users.filter(u => u.totalRequests > 0).length;
 
       const trendGroups = useMemo(() => groupPeriodUsersRows(trendFlatRows), [trendFlatRows]);
@@ -2873,9 +3179,22 @@ Generated by Frank Group AI Governance Dashboard`);
 
       const handleData = useCallback((data, name, range) => {
         setRawRows(data); setFileName(name); setDateRange(range);
-        const emails = [...new Set(data.map(r=>r.user_email))];
+        const emails = [...new Set(data.map(r=>r.user_email).filter(Boolean))];
         const total  = data.reduce((s,r)=>s+(r.total_net_spend_usd||0),0);
         setDataInfo(`${range} · ${data.length} rows · ${emails.length} users · ${fmtAUD(total*settings.audRate)} total`);
+        // Auto-add unknown emails to team_overrides
+        setSettings(s => {
+          const existing = s.team_overrides || [];
+          const knownEmails = new Set([
+            ...Object.keys(USERS_MAP).map(e => e.toLowerCase()),
+            ...existing.map(t => t.email.toLowerCase()),
+          ]);
+          const newEntries = emails
+            .filter(e => !knownEmails.has(e.toLowerCase()))
+            .map(e => ({ email: e, name: e.split('@')[0], entity: 'Frank Advisory', roleType: 'advisory', tier: 'Standard', active: true }));
+          if (!newEntries.length) return s;
+          return { ...s, team_overrides: [...existing, ...newEntries] };
+        });
       }, [settings.audRate]);
 
       const onIngestConvItems = useCallback((items, name) => {
@@ -2959,6 +3278,7 @@ Generated by Frank Group AI Governance Dashboard`);
         [rawRows, dateRange]
       );
 
+      // Determine the effective date range label for the header banner
       const activeDateFrom = dateRangeFrom;
       const activeDateTo = dateRangeTo;
       const activeperiodLabel = useMemo(() => {
@@ -3218,7 +3538,13 @@ Generated by Frank Group AI Governance Dashboard`);
             React.createElement(Module5, { users, isSampleData }),
             React.createElement(Module7InitiativeTracker, { initiatives, onAddInitiative: handleInitiativeAdd, onUpdateInitiative: handleInitiativeUpdate, onDeleteInitiative: handleInitiativeDelete, metrics, readOnly: false, isSampleData }),
             React.createElement(Module9Coaching, { users, metrics, hasBehaviorData: hasBehaviorDataForModules, isSampleData }),
-            React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange: reportDateRange, hasBehaviorData: hasBehaviorDataForModules, runtimeCfg, isSampleData }),
+            React.createElement(Module8ReportGenerator, { users, metrics, initiatives, settings, dateRange: reportDateRange, hasBehaviorData: hasBehaviorDataForModules, runtimeCfg, isSampleData })
+          ),
+          activeTab === "tools" && React.createElement(React.Fragment, null,
+            React.createElement("div", { style:{ paddingTop:8 } },
+              React.createElement("h2", { style:{ fontSize:20, fontWeight:700, color:COLOURS.advisory, marginBottom:4 } }, "Cost Optimisation Tools"),
+              React.createElement("p", { style:{ fontSize:13, color:COLOURS.captionText, marginBottom:16 } }, "Scenario modelling and what-if calculators.")
+            ),
             React.createElement(Module6, { users, settings, dateRange: reportDateRange, isSampleData })
           )
         ),
@@ -3226,5 +3552,5 @@ Generated by Frank Group AI Governance Dashboard`);
       );
     }
 
-
+})();
 export default App;
