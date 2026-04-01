@@ -96,7 +96,16 @@ restartPolicyMaxRetries = 3
 
 **Phase 1: None required.** The dashboard is fully client-side.
 
-**Phase 2 (future):** Will need `ANTHROPIC_API_KEY`, `DATABASE_URL`, `SMTP_*` vars — set in Railway dashboard → Variables tab.
+**Phase 2 — Supabase (current):** For persistence on the deployed static site, set these in Railway → **Variables**:
+
+| Variable | Value |
+|----------|--------|
+| `SUPABASE_URL` | Project URL, e.g. `https://pwuapjdfrdbgcekrwlpr.supabase.co` |
+| `SUPABASE_ANON_KEY` | Supabase **anon** public key (Dashboard → Project Settings → API) |
+
+On `npm start`, **`prestart`** runs [`scripts/write-dashboard-config-from-env.js`](../scripts/write-dashboard-config-from-env.js) and, when both variables are non-empty, writes `dashboard-config.json` at the repo root before `npx serve`. That file is gitignored locally but present at runtime on Railway so the browser can `fetch("/dashboard-config.json")` as in `index.html`. Without these variables, the app still serves; Supabase features stay off until config exists.
+
+**Phase 2 (later):** Anthropic auto-fetch, SMTP, etc. may add `ANTHROPIC_API_KEY`, `SMTP_*` — document when implemented.
 
 > Railway automatically injects `PORT` — do NOT set it manually.
 
@@ -144,5 +153,5 @@ git push origin main
 | Branch | `main` |
 | Start command | `npx serve . --listen $PORT --no-clipboard` |
 | Health check | `GET /` |
-| Env vars needed | None (Phase 1) |
+| Env vars needed | None for core dashboard; `SUPABASE_URL` + `SUPABASE_ANON_KEY` for Phase 2 on Railway |
 | Deploy trigger | `git push origin main` |

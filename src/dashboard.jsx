@@ -405,6 +405,112 @@ import {
       return "unknown";
     }
 
+    function sanitizeFilenameForStorage(name) {
+      const base = (name || "file").split(/[/\\]/).pop() || "file";
+      const cleaned = base.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^\.+/, "");
+      return (cleaned || "file").slice(0, 180);
+    }
+
+    /** Storage path: {YYYY-MM-DD}/{stem}_{timestamp}{ext} — avoids same-day name collisions. */
+    function buildUploadStoragePath(file) {
+      const d = new Date();
+      const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const safe = sanitizeFilenameForStorage(file.name);
+      const dot = safe.lastIndexOf(".");
+      const stem = dot > 0 ? safe.slice(0, dot) : safe;
+      const ext = dot > 0 ? safe.slice(dot) : "";
+      return `${ymd}/${stem}_${Date.now()}${ext}`;
+    }
+
+    /**
+     * Parse one file's text and invoke ingest callbacks (same routing as Module 1).
+     * @returns {{ errs: string[], fileType: string|null }} fileType for Supabase uploads row when successful.
+     */
+    function getIngestResult(file, text, handlers) {
+      const {
+        onData, onConvItems, onProjItems, onMemItems, onUsersOverlay, onCodeRow,
+      } = handlers;
+      const nm = (file.name || "").toLowerCase();
+      const errs = [];
+      let fileType = null;
+      if (nm.endsWith(".json")) {
+        if (nm.includes("conversation")) {
+          const { items, errors } = parseConversationsFile(text);
+          if (errors.length) errs.push(errors[0]);
+          else { onConvItems(items, file.name); fileType = "conversations"; }
+        } else if (nm.includes("project")) {
+          const { items, errors } = parseProjectsFile(text);
+          if (errors.length) errs.push(errors[0]);
+          else { onProjItems(items, file.name); fileType = "projects"; }
+        } else if (nm.includes("memor")) {
+          const { items, errors } = parseMemoriesFile(text);
+          if (errors.length) errs.push(errors[0]);
+          else { onMemItems(items, file.name); fileType = "memories"; }
+        } else if (nm.includes("user")) {
+          const { map, metaByEmail, errors } = parseUsersFile(text);
+          if (errors.length) errs.push(errors[0]);
+          else { onUsersOverlay(map, metaByEmail, file.name); fileType = "users"; }
+        } else {
+          errs.push(`${file.name}: name must include conversation, project, memor, or user (e.g. conversations.json)`);
+        }
+        return { errs, fileType };
+      }
+      if (nm.endsWith(".csv")) {
+        const kind = sniffCsvKind(text);
+        if (kind === "anthropic") {
+          const { data, errors } = parseCSV(text);
+          if (errors.length) errs.push(errors[0]);
+          else {
+            const match = file.name.match(/(\d{4}-\d{2}-\d{2})[-_to]+(\d{4}-\d{2}-\d{2})/);
+            const dateRange = match ? `${match[1]} to ${match[2]}` : "Unknown period";
+            onData(data, file.name, dateRange);
+            fileType = "anthropic-csv";
+          }
+        } else if (kind === "code-api") {
+          const { row, errors } = parseCodeApiCSV(text);
+          if (errors.length) errs.push(errors[0]);
+          else if (!row) errs.push(`${file.name}: could not parse Claude Code API CSV`);
+          else { onCodeRow(row, file.name); fileType = "code-csv"; }
+        } else if (kind === "code") {
+          const { row, errors } = parseCodeCSV(text);
+          if (errors.length) errs.push(errors[0]);
+          else if (!row || !row.email) errs.push(`${file.name}: could not parse Claude Code CSV row`);
+          else { onCodeRow(row, file.name); fileType = "code-csv"; }
+        } else {
+          errs.push(`${file.name}: not Anthropic team CSV (needs user_email, model, product, …) nor Claude Code CSV (legacy: User, Spend, Lines; API: usage_date_utc, model_version, workspace, …)`);
+        }
+        return { errs, fileType };
+      }
+      errs.push(`${file.name}: use .csv or .json`);
+      return { errs, fileType };
+    }
+
+    async function persistIngestToSupabase(supabase, userEmail, file, fileType, onDone) {
+      try {
+        const path = buildUploadStoragePath(file);
+        const { error: e1 } = await supabase.storage.from("uploads").upload(path, file, {
+          contentType: file.type || "text/plain; charset=utf-8",
+          upsert: false,
+        });
+        if (e1) {
+          console.warn("Supabase storage upload failed:", e1);
+          if (onDone) onDone();
+          return;
+        }
+        const { error: e2 } = await supabase.from("uploads").insert({
+          file_name: file.name,
+          file_type: fileType,
+          storage_path: path,
+          file_size: typeof file.size === "number" ? file.size : null,
+          uploaded_by: userEmail || null,
+        });
+        if (e2) console.warn("Supabase uploads insert failed:", e2);
+      } catch (e) {
+        console.warn("persistIngestToSupabase:", e);
+      }
+      if (onDone) onDone();
+    }
+
     function computeConversationSignal(conv) {
       if (!conv || !conv.count) return 0;
       const countScore = Math.min(100, (conv.count / 50) * 100);
@@ -964,6 +1070,8 @@ import {
       convSourceName, projSourceName, memSourceName, usersSourceName,
       refreshAud, audLoading, audRateUpdated,
       savePeriod,
+      persistToCloud,
+      storedUploads,
     }) {
       const [dragIngest, setDragIngest] = useState(false);
       const [error, setError] = useState(null);
@@ -975,75 +1083,34 @@ import {
         reader.readAsText(file);
       }), []);
 
+      const ingestHandlers = useMemo(() => ({
+        onData, onConvItems, onProjItems, onMemItems, onUsersOverlay, onCodeRow,
+      }), [onData, onConvItems, onProjItems, onMemItems, onUsersOverlay, onCodeRow]);
+
       const processIngestFile = useCallback((file, text) => {
-        const nm = (file.name || "").toLowerCase();
-        const errs = [];
-        if (nm.endsWith(".json")) {
-          if (nm.includes("conversation")) {
-            const { items, errors } = parseConversationsFile(text);
-            if (errors.length) errs.push(errors[0]);
-            else onConvItems(items, file.name);
-          } else if (nm.includes("project")) {
-            const { items, errors } = parseProjectsFile(text);
-            if (errors.length) errs.push(errors[0]);
-            else onProjItems(items, file.name);
-          } else if (nm.includes("memor")) {
-            const { items, errors } = parseMemoriesFile(text);
-            if (errors.length) errs.push(errors[0]);
-            else onMemItems(items, file.name);
-          } else if (nm.includes("user")) {
-            const { map, metaByEmail, errors } = parseUsersFile(text);
-            if (errors.length) errs.push(errors[0]);
-            else onUsersOverlay(map, metaByEmail, file.name);
-          } else {
-            errs.push(`${file.name}: name must include conversation, project, memor, or user (e.g. conversations.json)`);
-          }
-          return errs;
-        }
-        if (nm.endsWith(".csv")) {
-          const kind = sniffCsvKind(text);
-          if (kind === "anthropic") {
-            const { data, errors } = parseCSV(text);
-            if (errors.length) errs.push(errors[0]);
-            else {
-              const match = file.name.match(/(\d{4}-\d{2}-\d{2})[-_to]+(\d{4}-\d{2}-\d{2})/);
-              const dateRange = match ? `${match[1]} to ${match[2]}` : "Unknown period";
-              onData(data, file.name, dateRange);
-            }
-          } else if (kind === "code-api") {
-            const { row, errors } = parseCodeApiCSV(text);
-            if (errors.length) errs.push(errors[0]);
-            else if (!row) errs.push(`${file.name}: could not parse Claude Code API CSV`);
-            else onCodeRow(row, file.name);
-          } else if (kind === "code") {
-            const { row, errors } = parseCodeCSV(text);
-            if (errors.length) errs.push(errors[0]);
-            else if (!row || !row.email) errs.push(`${file.name}: could not parse Claude Code CSV row`);
-            else onCodeRow(row, file.name);
-          } else {
-            errs.push(`${file.name}: not Anthropic team CSV (needs user_email, model, product, …) nor Claude Code CSV (legacy: User, Spend, Lines; API: usage_date_utc, model_version, workspace, …)`);
-          }
-          return errs;
-        }
-        errs.push(`${file.name}: use .csv or .json`);
-        return errs;
-      }, [onData, onConvItems, onProjItems, onMemItems, onUsersOverlay, onCodeRow]);
+        return getIngestResult(file, text, ingestHandlers);
+      }, [ingestHandlers]);
 
       const runIngestBatch = useCallback(async fileList => {
         const files = [...fileList].filter(Boolean);
         if (!files.length) return;
         const allErrs = [];
+        const supa = persistToCloud && persistToCloud.supabase;
+        const email = persistToCloud && persistToCloud.userEmail;
         for (const file of files) {
           try {
             const text = await readFileText(file);
-            const part = processIngestFile(file, text);
-            allErrs.push(...part);
+            const { errs, fileType } = processIngestFile(file, text);
+            allErrs.push(...errs);
+            if (!errs.length && fileType && supa && email) {
+              void persistIngestToSupabase(supa, email, file, fileType, persistToCloud.onUploadsChanged);
+            }
           } catch (e) {
             allErrs.push(`${file.name}: ${e.message || e}`);
           }
         }
         setError(allErrs.length ? allErrs.join(" · ") : null);
-      }, [readFileText, processIngestFile]);
+      }, [readFileText, processIngestFile, persistToCloud]);
 
       const onDropIngest = useCallback(e => {
         e.preventDefault();
@@ -1135,6 +1202,75 @@ import {
             type:"button", onClick: onClearAll,
             style:{ fontSize:12, padding:"6px 12px", borderRadius:6, border:`1px solid ${COLOURS.advisory}`, background:"#fff", color:COLOURS.advisory, cursor:"pointer", fontWeight:600 }
           }, "Clear all uploads")
+        ),
+        storedUploads && React.createElement("div", {
+          style: {
+            background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 14px", marginBottom: 14,
+          },
+        },
+          React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8, flexWrap: "wrap" } },
+            React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: COLOURS.advisory } }, "Cloud upload history (Supabase)"),
+            React.createElement("button", {
+              type: "button",
+              onClick: storedUploads.onRefresh,
+              disabled: storedUploads.loading,
+              style: {
+                fontSize: 11, padding: "4px 10px", borderRadius: 6, border: `1px solid ${COLOURS.advisory}`,
+                background: "#fff", color: COLOURS.advisory, cursor: storedUploads.loading ? "wait" : "pointer", fontWeight: 600,
+              },
+            }, storedUploads.loading ? "Loading…" : "Refresh list")
+          ),
+          React.createElement("div", { style: { fontSize: 11, color: COLOURS.captionText, marginBottom: 10 } },
+            "Signed-in admins: files persist to Storage after a successful parse. Load replaces in-session data for that file type; Delete removes the object and this row."),
+          storedUploads.loading && !storedUploads.rows.length
+            ? React.createElement("div", { style: { fontSize: 12, color: "#9ca3af" } }, "Loading…")
+            : !storedUploads.rows.length
+              ? React.createElement("div", { style: { fontSize: 12, color: "#9ca3af" } }, "No stored uploads yet.")
+              : React.createElement("div", { style: { maxHeight: 220, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 6, background: "#fff" } },
+                React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 11 } },
+                  React.createElement("thead", null,
+                    React.createElement("tr", { style: { background: "#f1f5f9", textAlign: "left" } },
+                      React.createElement("th", { style: { padding: "6px 8px", fontWeight: 700 } }, "File"),
+                      React.createElement("th", { style: { padding: "6px 8px", fontWeight: 700 } }, "Type"),
+                      React.createElement("th", { style: { padding: "6px 8px", fontWeight: 700 } }, "Uploaded"),
+                      React.createElement("th", { style: { padding: "6px 8px", fontWeight: 700 } }, "")
+                    )
+                  ),
+                  React.createElement("tbody", null,
+                    ...storedUploads.rows.map(row => {
+                      const busy = storedUploads.busyId === row.id;
+                      return React.createElement("tr", { key: row.id, style: { borderTop: "1px solid #eef2f7" } },
+                        React.createElement("td", { style: { padding: "6px 8px", wordBreak: "break-all", maxWidth: 140 } }, row.file_name),
+                        React.createElement("td", { style: { padding: "6px 8px", color: "#64748b" } }, row.file_type),
+                        React.createElement("td", { style: { padding: "6px 8px", color: "#64748b", whiteSpace: "nowrap" } },
+                          row.uploaded_at ? new Date(row.uploaded_at).toLocaleString() : "—"),
+                        React.createElement("td", { style: { padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap" } },
+                          React.createElement("button", {
+                            type: "button",
+                            onClick: () => storedUploads.onLoadRow(row),
+                            disabled: busy,
+                            style: {
+                              fontSize: 10, marginRight: 6, padding: "3px 8px", borderRadius: 4,
+                              border: `1px solid ${COLOURS.advisory}`, background: "#fff", color: COLOURS.advisory,
+                              cursor: busy ? "wait" : "pointer", fontWeight: 600,
+                            },
+                          }, "Load"),
+                          React.createElement("button", {
+                            type: "button",
+                            onClick: () => storedUploads.onDeleteRow(row),
+                            disabled: busy,
+                            style: {
+                              fontSize: 10, padding: "3px 8px", borderRadius: 4,
+                              border: "1px solid #fca5a5", background: "#fff", color: "#dc2626",
+                              cursor: busy ? "wait" : "pointer", fontWeight: 600,
+                            },
+                          }, "Delete")
+                        )
+                      );
+                    })
+                  )
+                )
+              )
         ),
         React.createElement("div", { style:{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))", gap:12, marginBottom:14 } },
           React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:6 } },
@@ -2199,8 +2335,14 @@ Generated by Frank Group AI Governance Dashboard`);
       const [saveBusy, setSaveBusy] = useState(false);
       const [saveOk, setSaveOk] = useState(null);
       const [saveErr, setSaveErr] = useState(null);
+      const [uploadsList, setUploadsList] = useState([]);
+      const [uploadsLoading, setUploadsLoading] = useState(false);
+      const [uploadsRefreshKey, setUploadsRefreshKey] = useState(0);
+      const [uploadActionBusyId, setUploadActionBusyId] = useState(null);
 
       const periodFetchGen = useRef(0);
+      const ingestHandlersRef = useRef({});
+      const autoCloudIngestDoneRef = useRef(false);
 
       const supabaseUrl = String((runtimeCfg?.SUPABASE_URL ?? SUPABASE_URL) || "").trim();
       const supabaseAnon = String((runtimeCfg?.SUPABASE_ANON_KEY ?? SUPABASE_ANON_KEY) || "").trim();
@@ -2280,6 +2422,39 @@ Generated by Frank Group AI Governance Dashboard`);
         })();
         return () => { cancelled = true; };
       }, [periodViewId, supabaseClient]);
+
+      const bumpUploadsRefresh = useCallback(() => setUploadsRefreshKey(k => k + 1), []);
+
+      const persistToCloud = useMemo(() => {
+        if (!supabaseClient || !authSession?.user || !isAllowedDashboardEmail(authSession.user.email)) return null;
+        return {
+          supabase: supabaseClient,
+          userEmail: authSession.user.email,
+          onUploadsChanged: bumpUploadsRefresh,
+        };
+      }, [supabaseClient, authSession, bumpUploadsRefresh]);
+
+      useEffect(() => {
+        if (!authSession?.user) autoCloudIngestDoneRef.current = false;
+      }, [authSession]);
+
+      useEffect(() => {
+        if (!persistToCloud) {
+          setUploadsList([]);
+          setUploadsLoading(false);
+          return undefined;
+        }
+        let cancelled = false;
+        setUploadsLoading(true);
+        const sb = persistToCloud.supabase;
+        (async () => {
+          const { data, error } = await sb.from("uploads").select("*").order("uploaded_at", { ascending: false });
+          if (cancelled) return;
+          setUploadsList(!error && data ? data : []);
+          setUploadsLoading(false);
+        })();
+        return () => { cancelled = true; };
+      }, [persistToCloud, uploadsRefreshKey]);
 
       const uuidMap = useMemo(() => mergeUuidMap(uuidOverlay), [uuidOverlay]);
 
@@ -2448,6 +2623,100 @@ Generated by Frank Group AI Governance Dashboard`);
           }
         : null;
 
+      ingestHandlersRef.current = {
+        onData: handleData,
+        onConvItems: (items, name) => { setConvItems(items); setConvSourceName(name || null); },
+        onProjItems: (items, name) => { setProjItems(items); setProjSourceName(name || null); },
+        onMemItems: (items, name) => { setMemItems(items); setMemSourceName(name || null); },
+        onUsersOverlay: (map, meta, name) => {
+          setUuidOverlay(prev => ({ ...prev, ...map }));
+          setUserMetaByEmail(prev => ({ ...prev, ...meta }));
+          setUsersSourceName(name || null);
+        },
+        onCodeRow: (row, name) => { setCodeData(row); setCodeFileName(name); },
+      };
+
+      const handleLoadStoredUpload = useCallback(async row => {
+        if (!supabaseClient || !row.storage_path) return;
+        setUploadActionBusyId(row.id);
+        try {
+          const { data, error } = await supabaseClient.storage.from("uploads").download(row.storage_path);
+          if (error || !data) throw error || new Error("download failed");
+          const text = await data.text();
+          getIngestResult({ name: row.file_name }, text, ingestHandlersRef.current);
+        } catch (e) {
+          console.warn("Load stored upload failed:", e);
+        }
+        setUploadActionBusyId(null);
+      }, [supabaseClient]);
+
+      const handleDeleteStoredUpload = useCallback(async row => {
+        if (!supabaseClient || !row.id) return;
+        if (!window.confirm(`Delete "${row.file_name}" from cloud storage?`)) return;
+        setUploadActionBusyId(row.id);
+        try {
+          await supabaseClient.storage.from("uploads").remove([row.storage_path]);
+          await supabaseClient.from("uploads").delete().eq("id", row.id);
+          bumpUploadsRefresh();
+        } catch (e) {
+          console.warn("Delete stored upload failed:", e);
+        }
+        setUploadActionBusyId(null);
+      }, [supabaseClient, bumpUploadsRefresh]);
+
+      useEffect(() => {
+        if (!persistToCloud || autoCloudIngestDoneRef.current) return undefined;
+        let cancelled = false;
+        const { supabase } = persistToCloud;
+        const finish = () => {
+          if (!cancelled) {
+            autoCloudIngestDoneRef.current = true;
+            bumpUploadsRefresh();
+          }
+        };
+        (async () => {
+          try {
+            const { data: rows, error } = await supabase.from("uploads").select("*").order("uploaded_at", { ascending: false });
+            if (cancelled) return;
+            if (error || !rows?.length) {
+              finish();
+              return;
+            }
+            const latestByType = {};
+            for (const r of rows) {
+              if (!latestByType[r.file_type]) latestByType[r.file_type] = r;
+            }
+            const order = ["anthropic-csv", "users", "conversations", "projects", "memories", "code-csv"];
+            for (const ft of order) {
+              const row = latestByType[ft];
+              if (!row || cancelled) continue;
+              const { data: blob, error: dErr } = await supabase.storage.from("uploads").download(row.storage_path);
+              if (cancelled || dErr || !blob) continue;
+              let text;
+              try { text = await blob.text(); } catch (_) { continue; }
+              if (cancelled) break;
+              getIngestResult({ name: row.file_name }, text, ingestHandlersRef.current);
+            }
+            finish();
+          } catch (e) {
+            console.warn("Auto-load cloud uploads:", e);
+            finish();
+          }
+        })();
+        return () => { cancelled = true; };
+      }, [persistToCloud, bumpUploadsRefresh]);
+
+      const storedUploadsForModule = useMemo(() => (
+        persistToCloud ? {
+          rows: uploadsList,
+          loading: uploadsLoading,
+          busyId: uploadActionBusyId,
+          onRefresh: bumpUploadsRefresh,
+          onLoadRow: handleLoadStoredUpload,
+          onDeleteRow: handleDeleteStoredUpload,
+        } : null
+      ), [persistToCloud, uploadsList, uploadsLoading, uploadActionBusyId, bumpUploadsRefresh, handleLoadStoredUpload, handleDeleteStoredUpload]);
+
       const module1Props = {
         onData: handleData, onSettings: updateSettings, settings, fileName, dataInfo, onClearAll: handleClearAll,
         onConvItems: (items, name) => { setConvItems(items); setConvSourceName(name || null); },
@@ -2466,6 +2735,8 @@ Generated by Frank Group AI Governance Dashboard`);
         convSourceName, projSourceName, memSourceName, usersSourceName,
         refreshAud, audLoading, audRateUpdated,
         savePeriod: savePeriodBlock,
+        persistToCloud,
+        storedUploads: storedUploadsForModule,
       };
 
       return React.createElement("div", { style:{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", background:"#f1f5f9", minHeight:"100vh", padding:24, color:COLOURS.bodyText } },

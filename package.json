@@ -2,6 +2,7 @@
   "name": "ai-governance-dashboard",
   "version": "1.0.0",
   "scripts": {
+    "prestart": "node scripts/write-dashboard-config-from-env.js",
     "start": "npx serve . --listen $PORT --no-clipboard"
   }
 }

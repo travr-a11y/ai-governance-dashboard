@@ -1,6 +1,6 @@
 # Frank Group AI Governance Dashboard
 
-A client-side React dashboard for monitoring Claude.ai Team usage across Frank Advisory and Frank Law. Upload a spend CSV from the Anthropic admin panel and get a full governance report in seconds — no backend, no login, no build step.
+A client-side React dashboard for monitoring Claude.ai Team usage across Frank Advisory and Frank Law. Upload a spend CSV from the Anthropic admin panel and get a full governance report in seconds — no backend server, no build step. **Optional Phase 2:** sign in with Supabase (Magic Link) to save reporting periods, persist raw uploads to Supabase Storage, and auto-restore the latest files after login.
 
 **Live:** deployed on Railway (connect via `travr-a11y/ai-governance-dashboard`)
 
@@ -79,30 +79,42 @@ Railway URL: check the Railway dashboard → your service → **Settings → Dom
 index.html       ← Entry point. Loads CDN deps + inlines all JSX via Babel.
 package.json     ← Tells Railway to run: npx serve . --listen $PORT
 railway.toml     ← Railway deploy config (healthcheck, restart policy)
-.gitignore       ← Excludes .DS_Store, .env, node_modules
+.gitignore       ← Excludes .DS_Store, .env, node_modules, dashboard-config.json
 CLAUDE.md        ← Agent context + handoff (for AI coding agents)
+dashboard-config.example.json  ← Template for optional Supabase URL + anon key
 
 src/
   dashboard.jsx  ← Dev reference copy (keep in sync with index.html)
 
 docs/
-  DEPLOYMENT.md                          ← Full git + Railway deploy workflow
+  DEPLOYMENT.md                          ← Git + Railway; Phase 2 env vars on Railway
+  SUPABASE_PERSISTENCE_PLAN.md           ← Phase 2 persistence (Postgres + Storage + UI)
+  PHASE2_SHIP_AND_OPERATIONS_CHECKLIST.md ← Ship checklist + verification matrix
+  supabase-phase2.sql                    ← Schema + RLS + Storage policies reference
   DIGITAL_FLUENCY_SCORING.md             ← Fluency score formula reference
   PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md  ← Full product spec
   tasks/                                 ← Pending work items
   archive/                               ← Superseded planning docs
 ```
 
-**No build step.** Babel compiles JSX in-browser at load time. All data processing is client-side. No auth, no database. Optional API calls: `api.frankfurter.app` (live AUD/USD rate) and `openrouter.ai` (Module 8 AI narrative — BYOK).
+**No build step.** Babel compiles JSX in-browser at load time. Core metrics stay client-side. **Optional:** Supabase (`@supabase/supabase-js` from esm.sh) for authenticated persistence — see `docs/SUPABASE_PERSISTENCE_PLAN.md`. Local config: copy `dashboard-config.example.json` to `dashboard-config.json` (gitignored). **Railway:** set `SUPABASE_URL` and `SUPABASE_ANON_KEY`; `npm prestart` writes `dashboard-config.json` before `serve` (see `docs/DEPLOYMENT.md`). Other optional API calls: `api.frankfurter.app` (live AUD/USD) and `openrouter.ai` (Module 8 narrative — BYOK).
 
 ---
 
-## Phase 2 (planned)
+## Phase 2 — Supabase (in progress)
 
-- Persistent CSV history (PostgreSQL on Railway)
+**Shipped in app (with Supabase project configured):**
+
+- Saved reporting periods (`periods` / `period_users`) and header period selector
+- Raw file persistence — private Storage bucket `uploads` + `uploads` table manifest
+- Auto-restore — latest stored file per type after sign-in
+- Module 1 upload history — list, load, delete (Storage + DB)
+
+**Still planned:**
+
+- Historical WoW / MoM trend charts beyond saved periods
 - Anthropic Console API auto-fetch
-- Weekly report auto-email via Microsoft 365 SMTP
-- Historical WoW / MoM trend charts
-- Auth via email domain restriction
+- Weekly report auto-email (e.g. Microsoft 365 SMTP)
+- Auth hardening — domain restriction at the auth provider (not only client-side checks)
 
-See `docs/PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md` for full spec.
+**Docs:** `docs/SUPABASE_PERSISTENCE_PLAN.md`, `docs/PHASE2_SHIP_AND_OPERATIONS_CHECKLIST.md`, `docs/PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md` (full product spec).

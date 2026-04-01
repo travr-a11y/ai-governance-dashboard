@@ -6,7 +6,7 @@
 
 - GitHub: `https://github.com/travr-a11y/ai-governance-dashboard`
 - Railway: connect at railway.app → `travr-a11y/ai-governance-dashboard` (auto-deploys on push to main)
-- Phase 2 is next — see bottom of this file.
+- Phase 2 (Supabase) is in progress — raw uploads + manifest; saved periods; see bottom of this file.
 
 ---
 
@@ -27,6 +27,9 @@ docs/
   DEPLOYMENT.md                                        ← Git + Railway deploy workflow
   DIGITAL_FLUENCY_SCORING.md                           ← Fluency formula reference (keep in sync with index.html)
   PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md ← Full product spec
+  SUPABASE_PERSISTENCE_PLAN.md           ← Phase 2 handoff (uploads table, Storage, UI)
+  PHASE2_SHIP_AND_OPERATIONS_CHECKLIST.md ← Pre-ship + Railway env + ops verification
+  supabase-phase2.sql                    ← periods, period_users, uploads, Storage policies
 
   tasks/                          ← Pending work items (one file per task)
     TASK-01-code-csv-schema.md    ← New Claude Code API token CSV parser
@@ -52,6 +55,7 @@ Pure static site. Zero build step. No backend.
 - **Babel standalone** compiles JSX in-browser at load time
 - All data processing is client-side (FileReader API + inline CSV/JSON parsers)
 - No localStorage, no sessionStorage
+- **Optional Phase 2:** Supabase (`@supabase/supabase-js` from esm.sh) — Magic Link auth (Frank domains), `periods` / `period_users` snapshots, private Storage bucket `uploads` + `uploads` table manifest; successful ingests persist when signed in; auto-load latest file per `file_type` on login; Module 1 upload history (load/delete). Config: repo-root `dashboard-config.json` (gitignored); template `dashboard-config.example.json`. Railway: set `SUPABASE_URL` + `SUPABASE_ANON_KEY` — `prestart` writes that file before `serve` (see `docs/DEPLOYMENT.md`, `docs/PHASE2_SHIP_AND_OPERATIONS_CHECKLIST.md`). Project ref: `pwuapjdfrdbgcekrwlpr`.
 - **Optional:** `fetch` to `https://api.frankfurter.app/latest?from=USD&to=AUD` when the user clicks **Refresh live** on the AUD/USD rate (CORS-friendly, no API key)
 - **Optional:** Module 8 **Generate with Gemini** — user-pasted OpenRouter API key (session only); `fetch` to `https://openrouter.ai/api/v1/chat/completions` with model `google/gemini-2.5-pro` (BYOK). **Generate template report** works without a key. Template report stays fully client-side.
 
@@ -167,22 +171,25 @@ git push origin main
 
 ---
 
-## Phase 2 — planned next
+## Phase 2 — Supabase (in progress)
 
-| Feature | Notes |
-|---------|-------|
-| Persistent CSV history | PostgreSQL on Railway |
-| Historical trend charts | WoW / MoM |
-| Auto-fetch Anthropic | API key in env |
-| Auto-email reports | M365 SMTP |
-| Auth | Domain restriction |
+| Status | Feature | Notes |
+|--------|---------|-------|
+| Done | Saved reporting periods | `periods`, `period_users` rows; header period selector |
+| Done | Raw file persistence | Storage bucket `uploads`; DB manifest `uploads`; ingest → upload + insert (background) |
+| Done | Auto-restore session | Latest row per `file_type` downloaded and parsed after sign-in |
+| Done | Module 1 history UI | List, refresh, load file, delete (Storage + row) |
+| Planned | Historical trend charts | WoW / MoM beyond saved periods |
+| Planned | Auto-fetch Anthropic | API key in env |
+| Planned | Auto-email reports | M365 SMTP |
+| Planned | Auth hardening | Domain restriction at provider (hooks / allowlist) |
 
 ---
 
 ## Known issues / open questions
 
 - `dashboard.jsx` uses ES imports — not runnable without a bundler; dev reference. Live app is `index.html`.
-- Spend limits and initiatives do not persist across reload (export JSON for initiatives).
+- Spend limits and initiatives do not persist across reload (export JSON for initiatives). Raw exports persist in Supabase when configured and signed in.
 - Multi-signal fluency applies org-wide once conversation export is present; users without mapped conversations get a low conversation signal until their UUIDs appear in `users.json` or `UUID_MAP_BASE`.
 
 ---
