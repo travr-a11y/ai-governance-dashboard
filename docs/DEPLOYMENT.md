@@ -98,14 +98,15 @@ restartPolicyMaxRetries = 3
 
 **Phase 1: None required.** The dashboard is fully client-side.
 
-**Phase 2 — Supabase (current):** For persistence on the deployed static site, set these in Railway → **Variables**:
+**Phase 2 — Supabase + optional OpenRouter:** For persistence and optional Module 8 AI narrative on the deployed static site, set these in Railway → **Variables** (use every key you need; omit the rest):
 
-| Variable | Value |
-|----------|--------|
-| `SUPABASE_URL` | Project URL, e.g. `https://pwuapjdfrdbgcekrwlpr.supabase.co` |
-| `SUPABASE_ANON_KEY` | Supabase **anon** public key (Dashboard → Project Settings → API) |
+| Variable | Required for | Value |
+|----------|--------------|--------|
+| `SUPABASE_URL` | Phase 2 persistence | Project URL, e.g. `https://pwuapjdfrdbgcekrwlpr.supabase.co` |
+| `SUPABASE_ANON_KEY` | Phase 2 persistence | Supabase **anon** public key (Dashboard → Project Settings → API) |
+| `OPENROUTER_API_KEY` | Module 8 “Generate with Gemini” (optional) | `sk-or-v1-…` from [openrouter.ai](https://openrouter.ai) → Keys |
 
-On `npm start`, **`prestart`** runs [`scripts/write-dashboard-config-from-env.js`](../scripts/write-dashboard-config-from-env.js) and, when both variables are non-empty, writes `dashboard-config.json` at the repo root before `npx serve`. That file is gitignored locally but present at runtime on Railway so the browser can `fetch("/dashboard-config.json")` as in `index.html`. Without these variables, the app still serves; Supabase features stay off until config exists.
+On `npm start`, **`prestart`** runs [`scripts/write-dashboard-config-from-env.js`](../scripts/write-dashboard-config-from-env.js) and writes `dashboard-config.json` at the repo root with **every non-empty** variable above (Supabase pair and/or OpenRouter key). The file is gitignored locally but present at runtime on Railway so the browser can `fetch("/dashboard-config.json")` as in `index.html`. Without Supabase variables, the app still serves; Supabase features stay off until those keys exist in config. Without `OPENROUTER_API_KEY`, Module 8 can still use **Generate template report** or a pasted key in the UI.
 
 **Phase 2 (later):** Anthropic auto-fetch, SMTP, etc. may add `ANTHROPIC_API_KEY`, `SMTP_*` — document when implemented.
 
@@ -169,5 +170,5 @@ After each deploy:
 | Branch | `main` |
 | Start command | `npm start` (runs `prestart` then `npx serve …`) |
 | Health check | `GET /` |
-| Env vars needed | None for core dashboard; `SUPABASE_URL` + `SUPABASE_ANON_KEY` for Phase 2 on Railway |
+| Env vars needed | None for core dashboard; `SUPABASE_URL` + `SUPABASE_ANON_KEY` for Phase 2; optional `OPENROUTER_API_KEY` for pre-loaded Module 8 AI key |
 | Deploy trigger | `git push origin main` |

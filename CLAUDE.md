@@ -6,7 +6,7 @@
 
 - GitHub: `https://github.com/travr-a11y/ai-governance-dashboard`
 - Railway: connect at railway.app → `travr-a11y/ai-governance-dashboard` (auto-deploys on push to main)
-- **Railway action required:** Set `SUPABASE_URL` + `SUPABASE_ANON_KEY` in Railway → Variables (see `docs/DEPLOYMENT.md`).
+- **Railway:** Set `SUPABASE_URL` + `SUPABASE_ANON_KEY` for persistence; optional `OPENROUTER_API_KEY` for Module 8 AI narrative pre-loaded from config (see `docs/DEPLOYMENT.md`).
 
 ---
 
@@ -55,9 +55,9 @@ Pure static site. Zero build step. No backend.
 - **Babel standalone** compiles JSX in-browser at load time
 - All data processing is client-side (FileReader API + inline CSV/JSON parsers)
 - No localStorage, no sessionStorage
-- **Optional Phase 2:** Supabase (`@supabase/supabase-js` from esm.sh) — Magic Link auth (Frank domains), `periods` / `period_users` snapshots, private Storage bucket `uploads` + `uploads` table manifest; successful ingests persist when signed in; auto-load latest file per `file_type` on login; Module 1 upload history (load/delete). Config: repo-root `dashboard-config.json` (gitignored); template `dashboard-config.example.json`. Railway: set `SUPABASE_URL` + `SUPABASE_ANON_KEY` — `prestart` writes that file before `serve` (see `docs/DEPLOYMENT.md`, `docs/PHASE2_SHIP_AND_OPERATIONS_CHECKLIST.md`). Project ref: `pwuapjdfrdbgcekrwlpr`.
+- **Optional Phase 2:** Supabase (`@supabase/supabase-js` from esm.sh) — Magic Link auth (Frank domains), `periods` / `period_users` snapshots, private Storage bucket `uploads` + `uploads` table manifest; successful ingests persist when signed in; auto-load latest file per `file_type` on login; Module 1 upload history (load/delete). Config: repo-root `dashboard-config.json` (gitignored); template `dashboard-config.example.json`. Railway: set `SUPABASE_URL` + `SUPABASE_ANON_KEY` (and optionally `OPENROUTER_API_KEY`) — `prestart` writes non-empty keys into that file before `serve` (see `docs/DEPLOYMENT.md`, `docs/PHASE2_SHIP_AND_OPERATIONS_CHECKLIST.md`). Project ref: `pwuapjdfrdbgcekrwlpr`.
 - **Optional:** `fetch` to `https://api.frankfurter.app/latest?from=USD&to=AUD` when the user clicks **Refresh live** on the AUD/USD rate (CORS-friendly, no API key)
-- **Optional:** Module 8 **Generate with Gemini** — user-pasted OpenRouter API key (session only); `fetch` to `https://openrouter.ai/api/v1/chat/completions` with model `google/gemini-2.5-pro` (BYOK). **Generate template report** works without a key. Template report stays fully client-side.
+- **Optional:** Module 8 **Generate with Gemini** — OpenRouter API key from Railway env (`OPENROUTER_API_KEY` → `dashboard-config.json`), user paste (session), or local `OPENROUTER_REPORT_API_KEY` in a trusted private copy only; `fetch` to `https://openrouter.ai/api/v1/chat/completions` with model `google/gemini-2.5-pro`. **Generate template report** works without a key. Template report stays fully client-side. **Note:** Any key in `dashboard-config.json` is exposed to everyone who can load the deployed site — treat Railway + access control accordingly.
 
 Deploy = `git push origin main`. Railway runs `npm start` (`prestart` then `npx serve`) to serve the static files.
 
@@ -115,7 +115,7 @@ Regex buckets for Module 9 cross-team spotlight from **conversation titles only*
 | 5 | Product Analysis | Bar chart by surface; Opus leverage callouts. |
 | 6 | Savings Calculator | Opus→Sonnet migration slider; annualised. **Rendered at the bottom of the page** (after Module 9). |
 | 7 | AI Committee Initiative Tracker | Editable initiatives; JSON export. *(Was numbered Module 8 in Phase 1 UI.)* |
-| 8 | Report Generator | **Generate template report** + optional **Generate with Gemini** via OpenRouter (BYOK, aggregated JSON metrics only) + **Download .doc** + **Print / PDF** + `.txt`. *(Was Module 7.)* |
+| 8 | Report Generator | **Generate template report** + optional **Generate with Gemini** via OpenRouter (key from Railway / paste / local dev constant; aggregated JSON metrics only) + **Download .doc** + **Print / PDF** + `.txt`. *(Was Module 7.)* |
 | 9 | Coaching & leaderboard | Ranked fluency list; rule-based cards (metadata only); category spotlight from conversation **titles**. |
 
 **Header:** **Reporting period** banner under the title (demo vs live dates from CSV filename, inclusive day count when parsed).

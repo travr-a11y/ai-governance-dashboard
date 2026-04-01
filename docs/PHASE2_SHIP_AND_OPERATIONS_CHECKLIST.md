@@ -29,8 +29,9 @@
 
 - [ ] **Variables:** In Railway → service → **Variables**, set:
   - `SUPABASE_URL` — `https://pwuapjdfrdbgcekrwlpr.supabase.co` (or current project URL)
-  - `SUPABASE_ANON_KEY` — anon public key from Supabase API settings  
-  On deploy, `npm start` runs a short **prestart** step that writes `dashboard-config.json` from these variables (see [`DEPLOYMENT.md`](DEPLOYMENT.md) Phase 2 section). No need to commit that file.
+  - `SUPABASE_ANON_KEY` — anon public key from Supabase API settings
+  - *(Optional)* `OPENROUTER_API_KEY` — for Module 8 “Generate with Gemini” pre-loaded from config (see [`DEPLOYMENT.md`](DEPLOYMENT.md) env table).
+  On deploy, `npm start` runs a short **prestart** step that writes `dashboard-config.json` from non-empty variables (see [`DEPLOYMENT.md`](DEPLOYMENT.md) Phase 2 section). No need to commit that file.
 - [ ] **Verify:** After deploy, open the public URL, sign in, confirm periods/uploads load and a test ingest persists.
 - [ ] **Rollback:** Redeploy previous Railway deployment if persistence regressions appear; data remains in Supabase.
 

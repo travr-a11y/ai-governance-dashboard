@@ -81,7 +81,7 @@ package.json     ← `npm start`: prestart (optional dashboard-config) then `npx
 railway.toml     ← `startCommand = "npm start"` + healthcheck / restart policy
 .gitignore       ← Excludes .DS_Store, .env, node_modules, dashboard-config.json
 CLAUDE.md        ← Agent context + handoff (for AI coding agents)
-dashboard-config.example.json  ← Template for optional Supabase URL + anon key
+dashboard-config.example.json  ← Template for optional Supabase URL + anon key + optional OpenRouter key
 
 src/
   dashboard.jsx  ← Dev reference copy (keep in sync with index.html)
@@ -97,7 +97,7 @@ docs/
   archive/                               ← Superseded planning docs
 ```
 
-**No build step.** Babel compiles JSX in-browser at load time. Core metrics stay client-side. **Optional:** Supabase (`@supabase/supabase-js` from esm.sh) for authenticated persistence — see `docs/SUPABASE_PERSISTENCE_PLAN.md`. Local config: copy `dashboard-config.example.json` to `dashboard-config.json` (gitignored). **Railway:** set `SUPABASE_URL` and `SUPABASE_ANON_KEY`; `npm prestart` writes `dashboard-config.json` before `serve` (see `docs/DEPLOYMENT.md`). Other optional API calls: `api.frankfurter.app` (live AUD/USD) and `openrouter.ai` (Module 8 narrative — BYOK).
+**No build step.** Babel compiles JSX in-browser at load time. Core metrics stay client-side. **Optional:** Supabase (`@supabase/supabase-js` from esm.sh) for authenticated persistence — see `docs/SUPABASE_PERSISTENCE_PLAN.md`. Local config: copy `dashboard-config.example.json` to `dashboard-config.json` (gitignored). **Railway:** set `SUPABASE_URL` and `SUPABASE_ANON_KEY`; optionally `OPENROUTER_API_KEY` for Module 8; `npm prestart` writes `dashboard-config.json` before `serve` (see `docs/DEPLOYMENT.md`). Other optional API calls: `api.frankfurter.app` (live AUD/USD) and `openrouter.ai` (Module 8 narrative).
 
 ---
 
