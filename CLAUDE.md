@@ -14,9 +14,9 @@
 
 ```
 index.html       ← THE live file. All dashboard code is inline here (JSX via Babel standalone).
-package.json     ← Railway start command: npx serve . --listen $PORT --no-clipboard
-railway.toml     ← Railway deploy config
-.gitignore       ← **/.DS_Store, .env, node_modules
+package.json     ← `npm start` runs `prestart` then `npx serve` (see `railway.toml`)
+railway.toml     ← `startCommand = "npm start"` so Phase 2 `prestart` runs on deploy
+.gitignore       ← **/.DS_Store, .env, node_modules, dashboard-config.json
 README.md        ← Public-facing docs (GitHub)
 CLAUDE.md        ← This file — primary context for coding agents
 
@@ -59,7 +59,7 @@ Pure static site. Zero build step. No backend.
 - **Optional:** `fetch` to `https://api.frankfurter.app/latest?from=USD&to=AUD` when the user clicks **Refresh live** on the AUD/USD rate (CORS-friendly, no API key)
 - **Optional:** Module 8 **Generate with Gemini** — user-pasted OpenRouter API key (session only); `fetch` to `https://openrouter.ai/api/v1/chat/completions` with model `google/gemini-2.5-pro` (BYOK). **Generate template report** works without a key. Template report stays fully client-side.
 
-Deploy = `git push origin main`. Railway runs `npx serve .` to serve the static files.
+Deploy = `git push origin main`. Railway runs `npm start` (`prestart` then `npx serve`) to serve the static files.
 
 ---
 
@@ -171,7 +171,7 @@ git push origin main
 
 ---
 
-## Phase 2 — Supabase (in progress)
+## Phase 2 roadmap (remaining Supabase work)
 
 | Status | Feature | Notes |
 |--------|---------|-------|

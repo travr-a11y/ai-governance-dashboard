@@ -1,7 +1,7 @@
 # Deployment Guide — Frank Group AI Governance Dashboard
 
 **GitHub:** `https://github.com/travr-a11y/ai-governance-dashboard`
-**Platform:** Railway (static file serving via `npx serve`)
+**Platform:** Railway (static file serving via `npm start` → `prestart` optional config write → `npx serve`)
 **Deploy trigger:** `git push origin main` → Railway auto-redeploys
 
 ---
@@ -49,6 +49,7 @@ git remote add origin https://github.com/travr-a11y/ai-governance-dashboard.git
 | `.env` / `.env.local` | Secrets (none in Phase 1, but ready for Phase 2) |
 | `node_modules/` | Never commit |
 | `.railway/` | Railway CLI local state |
+| `dashboard-config.json` | Runtime Supabase config (written on Railway by `prestart`; never commit) |
 
 **Verify nothing sensitive is staged:**
 ```bash
@@ -77,6 +78,7 @@ git reset HEAD <file>
   "name": "ai-governance-dashboard",
   "version": "1.0.0",
   "scripts": {
+    "prestart": "node scripts/write-dashboard-config-from-env.js",
     "start": "npx serve . --listen $PORT --no-clipboard"
   }
 }
@@ -85,7 +87,7 @@ git reset HEAD <file>
 **`railway.toml`:**
 ```toml
 [deploy]
-startCommand = "npx serve . --listen $PORT --no-clipboard"
+startCommand = "npm start"
 healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
@@ -151,7 +153,7 @@ git push origin main
 |------|--------|
 | GitHub repo | `travr-a11y/ai-governance-dashboard` |
 | Branch | `main` |
-| Start command | `npx serve . --listen $PORT --no-clipboard` |
+| Start command | `npm start` (runs `prestart` then `npx serve …`) |
 | Health check | `GET /` |
 | Env vars needed | None for core dashboard; `SUPABASE_URL` + `SUPABASE_ANON_KEY` for Phase 2 on Railway |
 | Deploy trigger | `git push origin main` |

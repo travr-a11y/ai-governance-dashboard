@@ -58,6 +58,18 @@
       "trowley@frankadvisory.com.au": null,
     };
 
+    const SPEND_LIMIT_BY_LOWERCASE = Object.fromEntries(
+      Object.entries(SPEND_LIMITS).map(([k, v]) => [k.toLowerCase(), v])
+    );
+
+    function getSpendLimitForEmail(email) {
+      if (email == null || email === "") return undefined;
+      const lower = String(email).toLowerCase();
+      return Object.prototype.hasOwnProperty.call(SPEND_LIMIT_BY_LOWERCASE, lower)
+        ? SPEND_LIMIT_BY_LOWERCASE[lower]
+        : undefined;
+    }
+
     const MODEL_CLASS = {
       "claude_opus_4_6":            "Opus",
       "claude-opus-4-6":            "Opus",
@@ -530,7 +542,11 @@
           file_size: typeof file.size === "number" ? file.size : null,
           uploaded_by: userEmail || null,
         });
-        if (e2) console.warn("Supabase uploads insert failed:", e2);
+        if (e2) {
+          console.warn("Supabase uploads insert failed:", e2);
+          const { error: rmErr } = await supabase.storage.from("uploads").remove([path]);
+          if (rmErr) console.warn("Supabase storage rollback (orphan) failed:", rmErr);
+        }
       } catch (e) {
         console.warn("persistIngestToSupabase:", e);
       }
@@ -656,31 +672,32 @@
         u.productBreakdown[prod].requests += row.total_requests || 0;
       });
 
+      const presentEmailsLower = new Set(Object.keys(byUser).map(e => e.toLowerCase()));
       Object.keys(USERS_MAP).forEach(k => {
-        if (!Object.keys(byUser).find(e => e.toLowerCase() === k.toLowerCase())) {
+        if (!presentEmailsLower.has(k.toLowerCase())) {
           byUser[k] = { email:k, modelBreakdown:{}, productBreakdown:{}, totalSpendUSD:0, totalPromptTokens:0, totalCompletionTokens:0, totalRequests:0 };
         }
       });
 
       const allUsers = Object.values(byUser);
       if (codeRow && codeRow.email) {
-        const travisKey = LOWER_EMAIL_TO_KEY[codeRow.email.toLowerCase()];
-        const travisUser = allUsers.find(u => u.email?.toLowerCase() === travisKey?.toLowerCase());
-        if (travisUser) {
-          travisUser.totalSpendUSD += codeRow.spendUsd || 0;
+        const codeUserKey = LOWER_EMAIL_TO_KEY[codeRow.email.toLowerCase()];
+        const codeTargetUser = allUsers.find(u => u.email?.toLowerCase() === codeUserKey?.toLowerCase());
+        if (codeTargetUser) {
+          codeTargetUser.totalSpendUSD += codeRow.spendUsd || 0;
           if (codeRow.totalInputTokens != null && codeRow.totalOutputTokens != null) {
-            travisUser.totalPromptTokens += codeRow.totalInputTokens;
-            travisUser.totalCompletionTokens += codeRow.totalOutputTokens;
+            codeTargetUser.totalPromptTokens += codeRow.totalInputTokens;
+            codeTargetUser.totalCompletionTokens += codeRow.totalOutputTokens;
           } else if (codeRow.totalTokens) {
-            travisUser.totalPromptTokens += codeRow.totalTokens;
+            codeTargetUser.totalPromptTokens += codeRow.totalTokens;
           }
-          travisUser.codeSpendUSD = codeRow.spendUsd || 0;
-          travisUser.codeTokens = codeRow.totalTokens || 0;
-          travisUser.codeCsvLines = codeRow.codeLines || 0;
+          codeTargetUser.codeSpendUSD = codeRow.spendUsd || 0;
+          codeTargetUser.codeTokens = codeRow.totalTokens || 0;
+          codeTargetUser.codeCsvLines = codeRow.codeLines || 0;
           Object.entries(codeRow.modelBreakdown || {}).forEach(([tier, v]) => {
-            if (!travisUser.modelBreakdown[tier]) travisUser.modelBreakdown[tier] = { spend:0, tokens:0, requests:0 };
-            travisUser.modelBreakdown[tier].tokens += v.tokens || 0;
-            travisUser.modelBreakdown[tier].spend  += v.spend || 0;
+            if (!codeTargetUser.modelBreakdown[tier]) codeTargetUser.modelBreakdown[tier] = { spend:0, tokens:0, requests:0 };
+            codeTargetUser.modelBreakdown[tier].tokens += v.tokens || 0;
+            codeTargetUser.modelBreakdown[tier].spend  += v.spend || 0;
           });
         }
       }
@@ -719,8 +736,7 @@
           fluencyScore = spendSignal;
         }
         const fluencyTier = fluencyScore >= 70 ? 1 : fluencyScore >= 40 ? 2 : fluencyScore >= 10 ? 3 : 4;
-        const limitKey = Object.keys(SPEND_LIMITS).find(k => k.toLowerCase() === u.email.toLowerCase());
-        const spendLimit = limitKey !== undefined ? SPEND_LIMITS[limitKey] : undefined;
+        const spendLimit = getSpendLimitForEmail(u.email);
         const spendAUD = u.totalSpendUSD * audRate;
         const spendUtilisation = spendLimit ? (spendAUD / spendLimit) * 100 : null;
         let entity = info?.entity;
@@ -762,8 +778,7 @@
       const totalTokens = Number(pu.total_tokens) || 0;
       const totalPromptTokens = Math.round(totalTokens * 0.82);
       const totalCompletionTokens = Math.max(0, totalTokens - totalPromptTokens);
-      const limitKey = Object.keys(SPEND_LIMITS).find(k => k.toLowerCase() === String(pu.email || "").toLowerCase());
-      const spendLimit = limitKey !== undefined ? SPEND_LIMITS[limitKey] : null;
+      const spendLimit = getSpendLimitForEmail(pu.email);
       const spendAUD = totalSpendUSD * audRate;
       const spendUtilisation = spendLimit ? (spendAUD / spendLimit) * 100 : null;
       return {
@@ -968,21 +983,11 @@
       );
     }
 
-    function AdminAuthGate({ supabase, children }) {
+    function AdminAuthGate({ supabase, session, children }) {
       const [email, setEmail] = useState("");
-      const [session, setSession] = useState(null);
       const [sent, setSent] = useState(false);
       const [busy, setBusy] = useState(false);
       const [err, setErr] = useState(null);
-
-      useEffect(() => {
-        if (!supabase) return undefined;
-        let sub;
-        supabase.auth.getSession().then(({ data }) => setSession(data.session));
-        const { data } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
-        sub = data.subscription;
-        return () => { if (sub) sub.unsubscribe(); };
-      }, [supabase]);
 
       if (!supabase) return null;
 
@@ -2365,6 +2370,7 @@ Generated by Frank Group AI Governance Dashboard`);
       const [uploadsLoading, setUploadsLoading] = useState(false);
       const [uploadsRefreshKey, setUploadsRefreshKey] = useState(0);
       const [uploadActionBusyId, setUploadActionBusyId] = useState(null);
+      const [cloudRestoreNote, setCloudRestoreNote] = useState(null);
 
       const periodFetchGen = React.useRef(0);
       const ingestHandlersRef = React.useRef({});
@@ -2554,13 +2560,35 @@ Generated by Frank Group AI Governance Dashboard`);
         setDataInfo(`${range} · ${data.length} rows · ${emails.length} users · ${fmtAUD(total*settings.audRate)} total`);
       }, [settings.audRate]);
 
-      const handleClear = () => { setRawRows(null); setFileName(null); setDateRange(null); setDataInfo(null); };
-      const handleClearExport = () => {
+      const handleClear = useCallback(() => {
+        setRawRows(null); setFileName(null); setDateRange(null); setDataInfo(null);
+      }, []);
+      const handleClearExport = useCallback(() => {
         setConvItems([]); setProjItems([]); setMemItems([]); setUuidOverlay({}); setUserMetaByEmail({});
         setCodeData(null); setCodeFileName(null);
         setConvSourceName(null); setProjSourceName(null); setMemSourceName(null); setUsersSourceName(null);
-      };
-      const handleClearAll = () => { handleClear(); handleClearExport(); };
+      }, []);
+      const handleClearAll = useCallback(() => { handleClear(); handleClearExport(); }, [handleClear, handleClearExport]);
+
+      const onIngestConvItems = useCallback((items, name) => {
+        setConvItems(items); setConvSourceName(name || null);
+      }, []);
+      const onIngestProjItems = useCallback((items, name) => {
+        setProjItems(items); setProjSourceName(name || null);
+      }, []);
+      const onIngestMemItems = useCallback((items, name) => {
+        setMemItems(items); setMemSourceName(name || null);
+      }, []);
+      const onIngestUsersOverlay = useCallback((map, meta, name) => {
+        setUuidOverlay(prev => ({ ...prev, ...map }));
+        setUserMetaByEmail(prev => ({ ...prev, ...meta }));
+        setUsersSourceName(name || null);
+      }, []);
+      const onIngestCodeRow = useCallback((row, name) => {
+        setCodeData(row); setCodeFileName(name);
+      }, []);
+
+      const updateSettings = useCallback(patch => setSettings(s => ({ ...s, ...patch })), []);
 
       const refreshAud = useCallback(async () => {
         setAudLoading(true);
@@ -2576,7 +2604,6 @@ Generated by Frank Group AI Governance Dashboard`);
         setAudLoading(false);
       }, []);
 
-      const updateSettings = patch => setSettings(s=>({...s,...patch}));
       const updateLimit = (email,val) => setSpendOverrides(p=>({...p,[email]:val}));
 
       const reportingPeriod = useMemo(() => {
@@ -2639,28 +2666,27 @@ Generated by Frank Group AI Governance Dashboard`);
         setSaveBusy(false);
       }, [supabaseClient, rawRows, dateRange, fileName, liveUsersBase]);
 
-      const savePeriodBlock = supabaseClient && authSession?.user && isAllowedDashboardEmail(authSession.user.email)
-        ? {
-            onSave: handleSavePeriod,
-            saving: saveBusy,
-            success: saveOk,
-            error: saveErr,
-            disabled: !rawRows,
-          }
-        : null;
+      const savePeriodBlock = useMemo(() => (
+        supabaseClient && authSession?.user && isAllowedDashboardEmail(authSession.user.email)
+          ? {
+              onSave: handleSavePeriod,
+              saving: saveBusy,
+              success: saveOk,
+              error: saveErr,
+              disabled: !rawRows,
+            }
+          : null
+      ), [supabaseClient, authSession, handleSavePeriod, saveBusy, saveOk, saveErr, rawRows]);
 
-      ingestHandlersRef.current = {
+      const ingestHandlersStable = useMemo(() => ({
         onData: handleData,
-        onConvItems: (items, name) => { setConvItems(items); setConvSourceName(name || null); },
-        onProjItems: (items, name) => { setProjItems(items); setProjSourceName(name || null); },
-        onMemItems: (items, name) => { setMemItems(items); setMemSourceName(name || null); },
-        onUsersOverlay: (map, meta, name) => {
-          setUuidOverlay(prev => ({ ...prev, ...map }));
-          setUserMetaByEmail(prev => ({ ...prev, ...meta }));
-          setUsersSourceName(name || null);
-        },
-        onCodeRow: (row, name) => { setCodeData(row); setCodeFileName(name); },
-      };
+        onConvItems: onIngestConvItems,
+        onProjItems: onIngestProjItems,
+        onMemItems: onIngestMemItems,
+        onUsersOverlay: onIngestUsersOverlay,
+        onCodeRow: onIngestCodeRow,
+      }), [handleData, onIngestConvItems, onIngestProjItems, onIngestMemItems, onIngestUsersOverlay, onIngestCodeRow]);
+      ingestHandlersRef.current = ingestHandlersStable;
 
       const handleLoadStoredUpload = useCallback(async row => {
         if (!supabaseClient || !row.storage_path) return;
@@ -2712,16 +2738,36 @@ Generated by Frank Group AI Governance Dashboard`);
             for (const r of rows) {
               if (!latestByType[r.file_type]) latestByType[r.file_type] = r;
             }
-            const order = ["anthropic-csv", "users", "conversations", "projects", "memories", "code-csv"];
-            for (const ft of order) {
+            // Order matters: spend CSV first; users.json before conversations/projects so UUID overlay resolves for behavior maps.
+            const restoreOrder = ["anthropic-csv", "users", "conversations", "projects", "memories", "code-csv"];
+            const restoreAttempts = [];
+            for (const ft of restoreOrder) {
               const row = latestByType[ft];
               if (!row || cancelled) continue;
               const { data: blob, error: dErr } = await supabase.storage.from("uploads").download(row.storage_path);
-              if (cancelled || dErr || !blob) continue;
-              let text;
-              try { text = await blob.text(); } catch (_) { continue; }
               if (cancelled) break;
+              if (dErr || !blob) {
+                restoreAttempts.push({ ft, ok: false });
+                console.warn("Cloud restore: could not download", ft, dErr);
+                continue;
+              }
+              let text;
+              try {
+                text = await blob.text();
+              } catch (e) {
+                restoreAttempts.push({ ft, ok: false });
+                console.warn("Cloud restore: could not read text for", ft, e);
+                continue;
+              }
               getIngestResult({ name: row.file_name }, text, ingestHandlersRef.current);
+              restoreAttempts.push({ ft, ok: true });
+            }
+            const failed = restoreAttempts.filter(a => !a.ok);
+            const okCount = restoreAttempts.filter(a => a.ok).length;
+            if (failed.length) {
+              setCloudRestoreNote(`Some cloud files failed to restore (${failed.map(f => f.ft).join(", ")}). Check console.`);
+            } else if (okCount > 0) {
+              setCloudRestoreNote(`Restored ${okCount} file type(s) from cloud.`);
             }
             finish();
           } catch (e) {
@@ -2743,27 +2789,62 @@ Generated by Frank Group AI Governance Dashboard`);
         } : null
       ), [persistToCloud, uploadsList, uploadsLoading, uploadActionBusyId, bumpUploadsRefresh, handleLoadStoredUpload, handleDeleteStoredUpload]);
 
-      const module1Props = {
-        onData: handleData, onSettings: updateSettings, settings, fileName, dataInfo, onClearAll: handleClearAll,
-        onConvItems: (items, name) => { setConvItems(items); setConvSourceName(name || null); },
-        onProjItems: (items, name) => { setProjItems(items); setProjSourceName(name || null); },
-        onMemItems: (items, name) => { setMemItems(items); setMemSourceName(name || null); },
-        onUsersOverlay: (map, meta, name) => {
-          setUuidOverlay(prev => ({ ...prev, ...map }));
-          setUserMetaByEmail(prev => ({ ...prev, ...meta }));
-          setUsersSourceName(name || null);
-        },
-        onCodeRow: (row, name) => { setCodeData(row); setCodeFileName(name); },
-        convCount: convItems.length, projCount: projItems.length, memCount: memItems.length,
+      const module1Props = useMemo(() => ({
+        onData: handleData,
+        onSettings: updateSettings,
+        settings,
+        fileName,
+        dataInfo,
+        onClearAll: handleClearAll,
+        onConvItems: onIngestConvItems,
+        onProjItems: onIngestProjItems,
+        onMemItems: onIngestMemItems,
+        onUsersOverlay: onIngestUsersOverlay,
+        onCodeRow: onIngestCodeRow,
+        convCount: convItems.length,
+        projCount: projItems.length,
+        memCount: memItems.length,
         codeLines: codeData ? codeData.codeLines : 0,
         codeUsageRowCount: codeData && codeData.usageRowCount ? codeData.usageRowCount : 0,
         codeFileName,
-        convSourceName, projSourceName, memSourceName, usersSourceName,
-        refreshAud, audLoading, audRateUpdated,
+        convSourceName,
+        projSourceName,
+        memSourceName,
+        usersSourceName,
+        refreshAud,
+        audLoading,
+        audRateUpdated,
         savePeriod: savePeriodBlock,
         persistToCloud,
         storedUploads: storedUploadsForModule,
-      };
+      }), [
+        handleData,
+        updateSettings,
+        settings,
+        fileName,
+        dataInfo,
+        handleClearAll,
+        onIngestConvItems,
+        onIngestProjItems,
+        onIngestMemItems,
+        onIngestUsersOverlay,
+        onIngestCodeRow,
+        convItems.length,
+        projItems.length,
+        memItems.length,
+        codeData,
+        codeFileName,
+        convSourceName,
+        projSourceName,
+        memSourceName,
+        usersSourceName,
+        refreshAud,
+        audLoading,
+        audRateUpdated,
+        savePeriodBlock,
+        persistToCloud,
+        storedUploadsForModule,
+      ]);
 
       return React.createElement("div", { style:{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", background:"#f1f5f9", minHeight:"100vh", padding:24, color:COLOURS.bodyText } },
         React.createElement("div", { style:{ background:COLOURS.advisory, color:"#fff", borderRadius:10, padding:"20px 28px", marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12, borderLeft:`6px solid ${COLOURS.accent}` } },
@@ -2786,6 +2867,14 @@ Generated by Frank Group AI Governance Dashboard`);
         },
           React.createElement("div", { style:{ fontSize:11, fontWeight:700, color:COLOURS.advisory, textTransform:"uppercase", letterSpacing:1.2, marginBottom:6 } }, "Reporting period"),
           React.createElement("div", { style:{ fontSize:16, fontWeight:700, color:COLOURS.bodyText, lineHeight:1.4 } }, reportingPeriod.line),
+          cloudRestoreNote && React.createElement("div", { style:{ fontSize:12, color:"#b45309", marginTop:8, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" } },
+            React.createElement("span", null, cloudRestoreNote),
+            React.createElement("button", {
+              type: "button",
+              onClick: () => setCloudRestoreNote(null),
+              style: { fontSize:11, padding:"2px 8px", borderRadius:4, border:`1px solid ${COLOURS.advisory}`, background:"#fff", cursor:"pointer", color:COLOURS.advisory, fontWeight:600 },
+            }, "Dismiss")
+          ),
           periodViewId && fetchingPeriod && React.createElement("div", { style:{ fontSize:12, color:"#b45309", marginTop:8 } }, "Loading saved period from Supabase…"),
           supabaseClient && authSession?.user && isAllowedDashboardEmail(authSession.user.email) && periodsList.length > 0 && React.createElement("div", { style:{ display:"flex", alignItems:"center", gap:10, marginTop:12, flexWrap:"wrap" } },
             React.createElement("label", { style:{ fontSize:12, fontWeight:600, color:COLOURS.bodyText } }, "Viewing:"),
@@ -2808,7 +2897,7 @@ Generated by Frank Group AI Governance Dashboard`);
         React.createElement("div", { style:{ display:"flex", flexDirection:"column", gap:20 } },
           activeTab === "admin" && (
             supabaseClient
-              ? React.createElement(AdminAuthGate, { supabase: supabaseClient },
+              ? React.createElement(AdminAuthGate, { supabase: supabaseClient, session: authSession },
                   () => React.createElement(Module1, module1Props))
               : (adminUnlocked
                 ? React.createElement(Module1, module1Props)
@@ -2836,7 +2925,7 @@ Generated by Frank Group AI Governance Dashboard`);
             React.createElement(Module6, { users, settings, dateRange: reportDateRange })
           )
         ),
-        React.createElement("div", { style:{ textAlign:"center", color:"#9ca3af", fontSize:11, marginTop:24, paddingBottom:12 } }, "Frank Group AI Governance Dashboard · Phase 2 · Optional Supabase persistence; Module 8 may send aggregated metrics to Anthropic; all other processing is client-side")
+        React.createElement("div", { style:{ textAlign:"center", color:"#9ca3af", fontSize:11, marginTop:24, paddingBottom:12 } }, "Frank Group AI Governance Dashboard · Phase 2 · Optional Supabase persistence; Module 8 optional AI narrative uses your OpenRouter key (aggregated metrics only); all other processing is client-side")
       );
     }
 

@@ -77,8 +77,8 @@ Railway URL: check the Railway dashboard → your service → **Settings → Dom
 
 ```
 index.html       ← Entry point. Loads CDN deps + inlines all JSX via Babel.
-package.json     ← Tells Railway to run: npx serve . --listen $PORT
-railway.toml     ← Railway deploy config (healthcheck, restart policy)
+package.json     ← `npm start`: prestart (optional dashboard-config) then `npx serve`
+railway.toml     ← `startCommand = "npm start"` + healthcheck / restart policy
 .gitignore       ← Excludes .DS_Store, .env, node_modules, dashboard-config.json
 CLAUDE.md        ← Agent context + handoff (for AI coding agents)
 dashboard-config.example.json  ← Template for optional Supabase URL + anon key
@@ -101,7 +101,7 @@ docs/
 
 ---
 
-## Phase 2 — Supabase (in progress)
+## Phase 2 — Supabase (core shipped; roadmap below)
 
 **Shipped in app (with Supabase project configured):**
 
