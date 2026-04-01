@@ -37,6 +37,11 @@ alter table periods enable row level security;
 alter table period_users enable row level security;
 
 -- Adjust role names if your project uses a custom authenticated role.
+drop policy if exists "periods_select_authenticated" on periods;
+drop policy if exists "periods_insert_authenticated" on periods;
+drop policy if exists "period_users_select_authenticated" on period_users;
+drop policy if exists "period_users_insert_authenticated" on period_users;
+
 create policy "periods_select_authenticated" on periods
   for select to authenticated using (true);
 
@@ -117,6 +122,11 @@ create policy "uploads_select_anon" on public.uploads for select to anon using (
 create policy "uploads_insert_anon" on public.uploads for insert to anon with check (true);
 create policy "uploads_delete_anon" on public.uploads for delete to anon using (true);
 
+drop policy if exists "periods_select_anon" on public.periods;
+drop policy if exists "periods_insert_anon" on public.periods;
+drop policy if exists "period_users_select_anon" on public.period_users;
+drop policy if exists "period_users_insert_anon" on public.period_users;
+
 create policy "periods_select_anon" on public.periods for select to anon using (true);
 create policy "periods_insert_anon" on public.periods for insert to anon with check (true);
 
@@ -127,3 +137,86 @@ create policy "storage_uploads_select_anon" on storage.objects for select to ano
 create policy "storage_uploads_insert_anon" on storage.objects for insert to anon with check (bucket_id = 'uploads');
 create policy "storage_uploads_update_anon" on storage.objects for update to anon using (bucket_id = 'uploads');
 create policy "storage_uploads_delete_anon" on storage.objects for delete to anon using (bucket_id = 'uploads');
+
+-- ─── Deduplication (content hash) + RAG document_chunks (pgvector) ─────────────
+-- Run after initial Phase 2 migration. Enables global SHA-256 dedup and Edge Function embeddings.
+
+alter table public.uploads add column if not exists content_hash text;
+
+create unique index if not exists uploads_content_hash_unique
+  on public.uploads (content_hash)
+  where content_hash is not null;
+
+create extension if not exists vector;
+
+create table if not exists public.document_chunks (
+  id           uuid primary key default gen_random_uuid(),
+  upload_id    uuid not null references public.uploads(id) on delete cascade,
+  chunk_index  int not null,
+  chunk_text   text not null,
+  embedding    vector(1536),
+  file_type    text,
+  metadata     jsonb,
+  created_at   timestamptz default now()
+);
+
+create index if not exists document_chunks_upload_id_idx on public.document_chunks (upload_id);
+
+-- IVFFlat index: build after you have some rows, or omit if empty project errors.
+-- create index if not exists document_chunks_embedding_idx
+--   on public.document_chunks using ivfflat (embedding vector_cosine_ops) with (lists = 50);
+
+alter table public.document_chunks enable row level security;
+
+drop policy if exists "chunks_select_anon" on public.document_chunks;
+drop policy if exists "chunks_insert_anon" on public.document_chunks;
+drop policy if exists "chunks_select_authenticated" on public.document_chunks;
+drop policy if exists "chunks_insert_authenticated" on public.document_chunks;
+
+create policy "chunks_select_anon" on public.document_chunks
+  for select to anon using (true);
+
+create policy "chunks_insert_anon" on public.document_chunks
+  for insert to anon with check (true);
+
+create policy "chunks_select_authenticated" on public.document_chunks
+  for select to authenticated using (true);
+
+create policy "chunks_insert_authenticated" on public.document_chunks
+  for insert to authenticated with check (true);
+
+create policy "chunks_delete_anon" on public.document_chunks
+  for delete to anon using (true);
+
+create policy "chunks_delete_authenticated" on public.document_chunks
+  for delete to authenticated using (true);
+
+-- ─── DELETE policies for periods + period_users (upsert by date range) ────────
+
+create policy "periods_delete_anon" on public.periods
+  for delete to anon using (true);
+create policy "periods_delete_authenticated" on public.periods
+  for delete to authenticated using (true);
+create policy "period_users_delete_anon" on public.period_users
+  for delete to anon using (true);
+create policy "period_users_delete_authenticated" on public.period_users
+  for delete to authenticated using (true);
+
+-- ─── App settings (key-value store for dashboard config, initiatives, overrides) ─
+
+create table if not exists public.app_settings (
+  key        text primary key,
+  value      jsonb not null,
+  updated_at timestamptz default now()
+);
+
+alter table public.app_settings enable row level security;
+
+create policy "settings_select_anon" on public.app_settings for select to anon using (true);
+create policy "settings_insert_anon" on public.app_settings for insert to anon with check (true);
+create policy "settings_update_anon" on public.app_settings for update to anon using (true) with check (true);
+create policy "settings_delete_anon" on public.app_settings for delete to anon using (true);
+create policy "settings_select_authenticated" on public.app_settings for select to authenticated using (true);
+create policy "settings_insert_authenticated" on public.app_settings for insert to authenticated with check (true);
+create policy "settings_update_authenticated" on public.app_settings for update to authenticated using (true) with check (true);
+create policy "settings_delete_authenticated" on public.app_settings for delete to authenticated using (true);

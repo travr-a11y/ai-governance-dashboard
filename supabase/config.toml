@@ -1,0 +1,6 @@
+# Supabase local / deploy config. Edge Function: ingest-process (RAG embeddings).
+# Deploy: supabase functions deploy ingest-process --project-ref YOUR_REF
+# Secrets: supabase secrets set OPENROUTER_API_KEY=... SUPABASE_SERVICE_ROLE_KEY=... (URL is injected)
+
+[functions.ingest-process]
+verify_jwt = true

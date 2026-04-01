@@ -24,6 +24,7 @@ src/
   dashboard.jsx  ← Dev/reference copy (keep in sync with index.html script block)
 
 docs/
+  AGENT_HANDOFF.md       ← Short bootstrap for new agent chats (context window saver)
   DEPLOYMENT.md                                        ← Git + Railway deploy workflow
   DIGITAL_FLUENCY_SCORING.md                           ← Fluency formula reference (keep in sync with index.html)
   PRD_FrankGroup_AI_Governance_Dashboard_2026-03-31.md ← Full product spec
@@ -171,7 +172,7 @@ git push origin main
 
 ---
 
-## Phase 2 roadmap (remaining Supabase work)
+## Phase 2 roadmap (Supabase work)
 
 | Status | Feature | Notes |
 |--------|---------|-------|
@@ -179,6 +180,12 @@ git push origin main
 | Done | Raw file persistence | Storage bucket `uploads`; DB manifest `uploads`; ingest → upload + insert (background) |
 | Done | Auto-restore session | Latest row per `file_type` downloaded and parsed after sign-in |
 | Done | Module 1 history UI | List, refresh, load file, delete (Storage + row) |
+| Done | Content-hash dedup | SHA-256 `content_hash` column on `uploads`; unique partial index; skip re-upload of identical files |
+| Done | RAG document_chunks | `document_chunks` table with `vector(1536)` embeddings; `vector` extension enabled |
+| Done | ingest-process Edge Function | Deployed; chunks uploaded files + OpenRouter embeddings → `document_chunks`; requires `OPENROUTER_API_KEY` secret in Supabase |
+| Done | Save period snapshots | `handleSavePeriod` writes aggregated user metrics to `periods` + `period_users`; "Save period snapshot" button in Module 1; upserts by date range |
+| Done | Settings/initiatives persistence | `app_settings` key-value table; dashboard settings, initiatives, spend overrides auto-saved on change and restored on load |
+| Done | Delete policies | Full CRUD on all tables (`periods`, `period_users`, `uploads`, `document_chunks`, `app_settings`) |
 | Planned | Historical trend charts | WoW / MoM beyond saved periods |
 | Planned | Auto-fetch Anthropic | API key in env |
 | Planned | Auto-email reports | M365 SMTP |
@@ -189,7 +196,7 @@ git push origin main
 ## Known issues / open questions
 
 - `dashboard.jsx` uses ES imports — not runnable without a bundler; dev reference. Live app is `index.html`.
-- Spend limits and initiatives do not persist across reload (export JSON for initiatives). Raw exports persist in Supabase when configured (anon key + env).
+- Spend limits, initiatives, and dashboard settings now persist in `app_settings` (Supabase) when configured. Raw exports persist in Storage + `uploads` table.
 - Multi-signal fluency applies org-wide once conversation export is present; users without mapped conversations get a low conversation signal until their UUIDs appear in `users.json` or `UUID_MAP_BASE`.
 
 ---
