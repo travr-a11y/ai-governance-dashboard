@@ -938,6 +938,7 @@
     const fmtDec   = (n,d=1) => (n == null || isNaN(n)) ? "0" : (+n).toFixed(d);
     const fmtUSD   = n => `$${fmtDec(n||0,2)}`;
     const fmtAUD   = n => `A$${fmtDec(n||0,2)}`;
+    const fmtAU    = iso => { if (!iso) return iso; const [y,m,d] = iso.split('-'); const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m-1]; return `${+d} ${mon} ${y}`; };
     const fmtTokens = n => {
       if (!n) return "0";
       if (n >= 1e9) return `${fmtDec(n/1e9,1)}B`;
@@ -1191,6 +1192,7 @@
       const [duplicateWarnings, setDuplicateWarnings] = useState([]);
       const [showRoiSettings, setShowRoiSettings] = useState(false);
       const [showRoiTasks, setShowRoiTasks] = useState(false);
+      const [roiSaveStatus, setRoiSaveStatus] = useState("idle");
       const [showSeatConfig, setShowSeatConfig] = useState(false);
       const [showTeamMembers, setShowTeamMembers] = useState(false);
       const [newMember, setNewMember] = useState(null);
@@ -1537,6 +1539,29 @@
                   )
                 )
               )
+            ),
+            React.createElement("div", { style:{ marginTop:14, display:"flex", alignItems:"center", gap:10 } },
+              React.createElement("button", {
+                type:"button",
+                onClick: () => {
+                  if (!supabaseClient) {
+                    setRoiSaveStatus("nosupa");
+                    setTimeout(() => setRoiSaveStatus("idle"), 2500);
+                    return;
+                  }
+                  setRoiSaveStatus("saving");
+                  saveAppSetting(supabaseClient, "dashboard_settings", settings)
+                    .then(() => {
+                      setRoiSaveStatus("saved");
+                      setTimeout(() => setRoiSaveStatus("idle"), 2000);
+                    })
+                    .catch(() => {
+                      setRoiSaveStatus("idle");
+                    });
+                },
+                style:{ fontSize:13, fontWeight:600, padding:"7px 18px", borderRadius:6, border:"none", background:COLOURS.advisory, color:"#fff", cursor:"pointer" },
+              }, roiSaveStatus === "saving" ? "Saving…" : roiSaveStatus === "saved" ? "Saved" : "Save ROI Settings"),
+              roiSaveStatus === "nosupa" && React.createElement("span", { style:{ fontSize:11, color:"#6b7280", fontStyle:"italic" } }, "Applied (Supabase not configured — will reset on reload)")
             )
           )
         ),
@@ -1767,7 +1792,8 @@
     // Module 2
     function Module2({ users, settings, metrics, hasBehaviorData, trendSeries, estHoursSaved, estValueAUD, activeUserCount, isSampleData }) {
       const [showFluencyLegend, setShowFluencyLegend] = React.useState(false);
-      const active = users.filter(u => u.totalRequests > 0);
+      const isActive = u => u.totalRequests > 0 || (u.behavior && (u.behavior.conv > 0 || u.behavior.proj > 0));
+      const active = users.filter(isActive);
       const advisory = users.filter(u => u.entity === "Frank Advisory");
       const law      = users.filter(u => u.entity === "Frank Law");
       const adoptionPct = (active.length / settings.totalSeats) * 100;
@@ -1797,15 +1823,10 @@
         },
           "Estimates use role-weighted task benchmarks (HBS/BCG/Stanford). Hourly rate: A$" + (settings.roiHourlyRate || 200) + ". Adjust in Settings."
         ),
-        React.createElement("div", { style:{ background:"#f5f3ff", border:`1px solid ${COLOURS.advisory}`, borderRadius:6, padding:"8px 12px", marginBottom:14, fontSize:12, color:COLOURS.bodyText } },
-          hasBehaviorData
-            ? React.createElement("span", null, React.createElement("strong", null, "Fluency: "), "Multi-signal score (conversations 40%, spend 25%, projects 20%, config 15%).")
-            : React.createElement("span", null, React.createElement("strong", null, "Fluency: "), "Spend-based estimate. Upload ", React.createElement("code", null, "conversations.json"), " for full behavioural score.")
-        ),
         React.createElement("div", { className:"m2-stats", style:{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginBottom:20 } },
           React.createElement(StatBox, { label:"Org Adoption", value:`${fmtDec(adoptionPct,0)}%`, sub:`${active.length} of ${settings.totalSeats} seats used Claude this period`, colour:COLOURS.advisory }),
-          React.createElement(StatBox, { label:"Frank Advisory", value:`${advisory.filter(u=>u.totalRequests>0).length} / ${advisory.length}`, sub:"used Claude this period", colour:COLOURS.advisory }),
-          React.createElement(StatBox, { label:"Frank Law", value:`${law.filter(u=>u.totalRequests>0).length} / ${law.length}`, sub:"used Claude this period", colour:COLOURS.law }),
+          React.createElement(StatBox, { label:"Frank Advisory", value:`${advisory.filter(isActive).length} / ${advisory.length}`, sub:"used Claude this period", colour:COLOURS.advisory }),
+          React.createElement(StatBox, { label:"Frank Law", value:`${law.filter(isActive).length} / ${law.length}`, sub:"used Claude this period", colour:COLOURS.law }),
           React.createElement(StatBox, { label:"Avg Fluency Score", value:fmtDec(metrics.avg_fluency_score,0), sub:`active users avg · org-wide: ${fmtDec(metrics.org_fluency_score,0)}`, colour:COLOURS.accent })
         ),
         React.createElement("div", { style:{ display:"flex", gap:16, flexWrap:"wrap", marginBottom:12, fontSize:12 } },
@@ -3004,10 +3025,15 @@ Generated by Frank Group AI Governance Dashboard`);
             if (cancelled) return;
             if (!error && data?.length) {
               setAvailablePeriods(data);
-              // Auto-select the most recent period on first load
+              // Auto-select the month option matching the most recent period
               setDateRangeFrom(prev => prev || data[0].date_from);
               setDateRangeTo(prev => prev || data[0].date_to);
-              setSelectedPeriodId(prev => prev || data[0].id);
+              setSelectedPeriodId(prev => {
+                if (prev) return prev;
+                const df = data[0].date_from;
+                if (df) { const [y,m] = df.split('-'); return `month-${y}-${m}`; }
+                return data[0].id;
+              });
             }
             setPeriodsLoading(false);
           });
@@ -3089,6 +3115,20 @@ Generated by Frank Group AI Governance Dashboard`);
               // initiatives are now loaded from the initiatives table (see below)
               if (row.key === "spend_overrides" && row.value && typeof row.value === "object") {
                 setSpendOverrides(row.value);
+              }
+              if (row.key === "conversation_behavior" && row.value?.convByUuid) {
+                const restored = Object.entries(row.value.convByUuid).flatMap(([uuid, count]) =>
+                  Array.from({ length: count }, () => ({ accountUuid: uuid }))
+                );
+                setConvItems(restored);
+                setConvSourceName(row.value.sourceName || "cloud (restored)");
+              }
+              if (row.key === "project_behavior" && row.value?.projByUuid) {
+                const restored = Object.entries(row.value.projByUuid).flatMap(([uuid, count]) =>
+                  Array.from({ length: count }, () => ({ accountUuid: uuid }))
+                );
+                setProjItems(restored);
+                setProjSourceName(row.value.sourceName || "cloud (restored)");
               }
             }
           }
@@ -3186,9 +3226,10 @@ Generated by Frank Group AI Governance Dashboard`);
       );
 
       const metrics = useMemo(() => {
-        const active   = users.filter(u=>u.totalRequests>0);
+        const isActive = u => u.totalRequests > 0 || (u.behavior && (u.behavior.conv > 0 || u.behavior.proj > 0));
+        const active   = users.filter(isActive);
         const lawTotal = users.filter(u=>u.entity==="Frank Law");
-        const lawActive= lawTotal.filter(u=>u.totalRequests>0);
+        const lawActive= lawTotal.filter(isActive);
         const totalUSD = users.reduce((s,u)=>s+u.totalSpendUSD,0);
         const opusUSD  = users.reduce((s,u)=>s+(u.modelBreakdown?.Opus?.spend||0),0);
         const sonnetUSD= users.reduce((s,u)=>s+(u.modelBreakdown?.Sonnet?.spend||0),0);
@@ -3228,10 +3269,24 @@ Generated by Frank Group AI Governance Dashboard`);
 
       const onIngestConvItems = useCallback((items, name) => {
         setConvItems(items); setConvSourceName(name || null);
-      }, []);
+        if (supabaseClient && items?.length) {
+          const convByUuid = items.reduce((acc, item) => {
+            if (item.accountUuid) acc[item.accountUuid] = (acc[item.accountUuid] || 0) + 1;
+            return acc;
+          }, {});
+          saveAppSetting(supabaseClient, "conversation_behavior", { convByUuid, sourceName: name || null, savedAt: new Date().toISOString() });
+        }
+      }, [supabaseClient]);
       const onIngestProjItems = useCallback((items, name) => {
         setProjItems(items); setProjSourceName(name || null);
-      }, []);
+        if (supabaseClient && items?.length) {
+          const projByUuid = items.reduce((acc, item) => {
+            if (item.accountUuid) acc[item.accountUuid] = (acc[item.accountUuid] || 0) + 1;
+            return acc;
+          }, {});
+          saveAppSetting(supabaseClient, "project_behavior", { projByUuid, sourceName: name || null, savedAt: new Date().toISOString() });
+        }
+      }, [supabaseClient]);
       const onIngestMemItems = useCallback((items, name) => {
         setMemItems(items); setMemSourceName(name || null);
       }, []);
@@ -3314,7 +3369,7 @@ Generated by Frank Group AI Governance Dashboard`);
         if (activeDateFrom && activeDateTo) {
           const matchedPeriod = availablePeriods.find(p => p.date_from === activeDateFrom && p.date_to === activeDateTo);
           const days = daysBetween(activeDateFrom, activeDateTo);
-          const label = matchedPeriod ? matchedPeriod.label : `${activeDateFrom} → ${activeDateTo}`;
+          const label = matchedPeriod ? matchedPeriod.label : `${fmtAU(activeDateFrom)} – ${fmtAU(activeDateTo)}`;
           return `${label} · ${days} day${days !== 1 ? "s" : ""}`;
         }
         return null;
@@ -3470,11 +3525,7 @@ Generated by Frank Group AI Governance Dashboard`);
             React.createElement("div", { className:"dash-title", style:{ fontSize:22, fontWeight:800, letterSpacing:0.3 } }, "AI Governance Dashboard"),
             React.createElement("div", { style:{ fontSize:13, opacity:0.9, marginTop:4 } }, "Frank Advisory · Frank Law · Frank Capital")
           ),
-          React.createElement("div", { style:{ textAlign:"right" } },
-            (rawRows || usageRowsData) && React.createElement("div", { style:{ fontSize:11, background:COLOURS.accent, color:"#1a1a1a", padding:"4px 12px", borderRadius:9999, fontWeight:700 } },
-              usageRowsData ? `DB · ${activeperiodLabel || dateRangeFrom}` : `Live: ${dateRange}`
-            )
-          )
+          React.createElement("div", { style:{ textAlign:"right" } })
         ),
         React.createElement("div", {
           style:{
@@ -3497,25 +3548,30 @@ Generated by Frank Group AI Governance Dashboard`);
           }
         },
           React.createElement("span", { style:{ fontSize:11, fontWeight:700, color:COLOURS.advisory, textTransform:"uppercase", letterSpacing:1 } }, "Date range"),
-          availablePeriods.length > 0 && React.createElement("select", {
-            value: selectedPeriodId || "custom",
-            onChange: e => {
-              const p = availablePeriods.find(p => p.id === e.target.value);
-              if (p) {
-                setDateRangeFrom(p.date_from);
-                setDateRangeTo(p.date_to);
-                setSelectedPeriodId(p.id);
-              } else {
-                setSelectedPeriodId("custom");
-              }
+          (() => {
+            const now = new Date();
+            const monthOptions = Array.from({ length: 18 }, (_, i) => {
+              const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+              const y = d.getFullYear();
+              const m = String(d.getMonth() + 1).padStart(2, '0');
+              const lastDay = new Date(y, d.getMonth() + 1, 0).getDate();
+              const label = d.toLocaleString('default', { month: 'short' }) + ' ' + y;
+              return { label, value: `month-${y}-${m}`, dateFrom: `${y}-${m}-01`, dateTo: `${y}-${m}-${String(lastDay).padStart(2,'0')}` };
+            });
+            return React.createElement("select", {
+              value: selectedPeriodId || "custom",
+              onChange: e => {
+                const val = e.target.value;
+                if (val === "custom") { setSelectedPeriodId("custom"); return; }
+                const opt = monthOptions.find(o => o.value === val);
+                if (opt) { setDateRangeFrom(opt.dateFrom); setDateRangeTo(opt.dateTo); setSelectedPeriodId(opt.value); }
+              },
+              style: { fontSize:12, borderRadius:6, border:"1px solid #d1d5db", padding:"5px 8px", color:COLOURS.bodyText },
             },
-            style: { fontSize:12, borderRadius:6, border:"1px solid #d1d5db", padding:"5px 8px", color:COLOURS.bodyText },
-          },
-            React.createElement("option", { value: "custom" }, "Custom range"),
-            ...availablePeriods.map(p =>
-              React.createElement("option", { key: p.id, value: p.id }, p.label)
-            )
-          ),
+              React.createElement("option", { value: "custom" }, "Custom range"),
+              ...monthOptions.map(o => React.createElement("option", { key: o.value, value: o.value }, o.label))
+            );
+          })(),
           React.createElement("input", {
             type: "date",
             value: dateRangeFrom || "",
